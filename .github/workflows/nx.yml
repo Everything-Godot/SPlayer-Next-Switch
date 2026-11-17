@@ -57,12 +57,15 @@ jobs:
 
       - name: Build
         working-directory: nx
+        shell: bash
         run: |
-          set -o pipefail
           echo "--- romfs tree ---"
           find romfs -type f -exec ls -l {} \;
           echo "--- build ---"
           make -j"$(nproc)" 2>&1 | tee build.log
+          status=${PIPESTATUS[0]}
+          echo "make exit=$status"
+          if [ "$status" -ne 0 ]; then exit "$status"; fi
           echo "--- artifact ---"
           ls -l build/SPlayer-Next.nro
 
