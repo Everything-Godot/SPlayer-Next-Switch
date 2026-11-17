@@ -11,6 +11,7 @@
 #include "dr_libs/dr_flac.h"
 #include "dr_libs/dr_mp3.h"
 #include "dr_libs/dr_wav.h"
+#include "stb/stb_vorbis.c"
 
 namespace spn {
 
@@ -48,6 +49,11 @@ void Decoder::close() {
         auto* p = static_cast<drwav*>(handle_);
         drwav_uninit(p);
         delete p;
+        break;
+      }
+      case Format::Vorbis: {
+        auto* p = static_cast<stb_vorbis*>(handle_);
+        stb_vorbis_close(p);
         break;
       }
       default:
@@ -101,6 +107,18 @@ bool Decoder::open(const std::string& path) {
     totalFrames_ = p->totalPCMFrameCount;
     return channels_ > 0;
   }
+  if (ext == "ogg") {
+    int err = 0;
+    stb_vorbis* p = stb_vorbis_open_filename(path.c_str(), &err, nullptr);
+    if (!p) return false;
+    const stb_vorbis_info info = stb_vorbis_get_info(p);
+    format_ = Format::Vorbis;
+    handle_ = p;
+    sampleRate_ = int(info.sample_rate);
+    channels_ = int(info.channels);
+    totalFrames_ = uint64_t(stb_vorbis_stream_length_in_samples(p));
+    return channels_ > 0;
+  }
   return false;
 }
 
@@ -119,6 +137,20 @@ uint64_t Decoder::readFrames(float* out, uint64_t frames) {
                                         out);
     case Format::Wav:
       return drwav_read_pcm_frames_f32(static_cast<drwav*>(handle_), frames, out);
+    case Format::Vorbis: {
+      // stb_vorbis hands back interleaved shorts; convert to float in place.
+      auto* p = static_cast<stb_vorbis*>(handle_);
+      const uint64_t ch = uint64_t(channels_ > 0 ? channels_ : 1);
+      scratch_.resize(size_t(frames * ch));
+      const int got = stb_vorbis_get_samples_short_interleaved(
+          p, channels_, reinterpret_cast<short*>(scratch_.data()),
+          int(frames * ch));
+      if (got <= 0) return 0;
+      for (size_t i = 0; i < size_t(got) * size_t(ch); ++i) {
+        out[i] = float(scratch_[i]) / 32768.0f;
+      }
+      return uint64_t(got);
+    }
     default:
       return 0;
   }
@@ -133,6 +165,9 @@ bool Decoder::seekToFrame(uint64_t frame) {
       return drflac_seek_to_pcm_frame(static_cast<drflac*>(handle_), frame);
     case Format::Wav:
       return drwav_seek_to_pcm_frame(static_cast<drwav*>(handle_), frame);
+    case Format::Vorbis:
+      return stb_vorbis_seek_frame(static_cast<stb_vorbis*>(handle_),
+                                   (unsigned int)frame) != 0;
     default:
       return false;
   }

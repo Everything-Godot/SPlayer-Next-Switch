@@ -15,7 +15,7 @@ namespace spn {
 // Switch. Everything is converted to interleaved float frames.
 class Decoder {
  public:
-  enum class Format { None, Mp3, Flac, Wav };
+  enum class Format { None, Mp3, Flac, Wav, Vorbis };
 
   Decoder() = default;
   ~Decoder();
@@ -38,11 +38,13 @@ class Decoder {
   bool seekToFrame(uint64_t frame);
 
  private:
-  void* handle_ = nullptr;  // drmp3* / drflac* / drwav*
+  void* handle_ = nullptr;  // drmp3* / drflac* / drwav* / stb_vorbis*
   Format format_ = Format::None;
   int sampleRate_ = 0;
   int channels_ = 0;
   uint64_t totalFrames_ = 0;
+  // Conversion buffer for decoders that only emit 16-bit PCM (Vorbis).
+  std::vector<int16_t> scratch_;
 };
 
 // Streams the current track to the console speakers.
