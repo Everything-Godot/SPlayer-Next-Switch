@@ -799,11 +799,10 @@ int main(int argc, char** argv) {
   PadState pad;
   padInitializeDefault(&pad);
 
-  // Touch needs its own init; a failure only disables touch, the pads still work.
-  const bool touchOk = R_SUCCEEDED(hidInitializeHidCommonSampling());
-  if (!touchOk) {
-    printf("hid touch init failed (touch disabled)\n");
-  }
+  // Touch needs its own init. libnx's hidInitializeTouchScreen() returns
+  // void and is idempotent, so there is nothing to check: touch and the
+  // pads are independent services, and a touch-less run still works.
+  hidInitializeTouchScreen();
 
   // Edge detection: act on the frame the finger goes down, not every frame it
   // stays down, otherwise a single tap would fire the action dozens of times.
@@ -830,12 +829,12 @@ int main(int argc, char** argv) {
     // --- touch --------------------------------------------------------------
     // hidTouchScreenState only reports a point while a finger is down, so the
     // down->up edge is what marks a tap.
-    if (touchOk) {
+    {
       HidTouchScreenState ts{};
-      const int count = hidGetTouchScreenStates(&ts, 1);
+      const size_t count = hidGetTouchScreenStates(&ts, 1);
       const bool down = count > 0 && ts.count > 0;
       if (down && !touchWasDown) {
-        handleTouch(ts.touches[0].x, ts.touches[0].y, 1280, 720);
+        handleTouch(int(ts.touches[0].x), int(ts.touches[0].y), 1280, 720);
       }
       touchWasDown = down;
     }
@@ -882,7 +881,6 @@ int main(int argc, char** argv) {
   g.store.save();
   g.audio.shutdown();
   fbuf.release();
-  if (touchOk) hidExit();
   if (netOk) socketExit();
   romfsExit();
   return 0;
