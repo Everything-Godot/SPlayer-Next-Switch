@@ -1,0 +1,78 @@
+name: NX Build
+
+# Builds the Nintendo Switch (nx) port only.
+# The desktop Electron targets are intentionally not built here.
+on:
+  push:
+    branches: [dev, main]
+    paths:
+      - "nx/**"
+      - ".github/workflows/nx.yml"
+  pull_request:
+    paths:
+      - "nx/**"
+      - ".github/workflows/nx.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nx-build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  DEVKITPRO: /opt/devkitpro
+
+jobs:
+  build:
+    name: Build NRO
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: devkitpro/devkita64:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Show toolchain
+        run: |
+          echo "DEVKITPRO=$DEVKITPRO"
+          ls "$DEVKITPRO"
+          "${DEVKITPRO}/devkitA64/bin/aarch64-none-elf-g++" --version | head -n 1
+
+      # devkitpro/devkita64 ships devkitA64 but not always the switch-dev group
+      # (libnx + tools). Install it only when the headers are missing.
+      - name: Ensure libnx is installed
+        run: |
+          if [ ! -f "$DEVKITPRO/libnx/include/switch.h" ]; then
+            echo "libnx missing -> installing switch-dev"
+            "$DEVKITPRO/pacman/bin/pacman" -S --noconfirm --needed switch-dev
+          else
+            echo "libnx already present"
+          fi
+          ls "$DEVKITPRO/libnx/include/switch.h"
+          ls "$DEVKITPRO/tools/bin/nacptool" "$DEVKITPRO/tools/bin/elf2nro"
+
+      - name: Build
+        working-directory: nx
+        run: |
+          make -j"$(nproc)" 2>&1 | tee build.log
+          echo "--- artifact ---"
+          ls -l build/SPlayer-Next.nro
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nx-build-log
+          path: nx/build.log
+          if-no-files-found: ignore
+
+      - name: Upload NRO
+        uses: actions/upload-artifact@v4
+        with:
+          name: SPlayer-Next-nx
+          path: nx/build/SPlayer-Next.nro
+          if-no-files-found: error
