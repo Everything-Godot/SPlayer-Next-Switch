@@ -58,6 +58,10 @@ jobs:
       - name: Build
         working-directory: nx
         run: |
+          set -o pipefail
+          echo "--- romfs tree ---"
+          find romfs -type f -exec ls -l {} \;
+          echo "--- build ---"
           make -j"$(nproc)" 2>&1 | tee build.log
           echo "--- artifact ---"
           ls -l build/SPlayer-Next.nro
