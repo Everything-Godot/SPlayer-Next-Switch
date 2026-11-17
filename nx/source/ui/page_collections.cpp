@@ -4,6 +4,7 @@
 #include <cstdio>
 
 #include "spn/icons.hpp"
+#include "spn/online_service.hpp"
 #include "spn/ui.hpp"
 #include "spn/widgets.hpp"
 
@@ -38,6 +39,8 @@ void trackList(App& a, Rect content, const std::vector<int>& indices, int& sel,
 
   c.fillRoundRect(content, 14, th.surface);
   c.pushClip(Rect(content.x + 4, content.y + 6, content.w - 8, content.h - 12));
+  ui::publishRows(a, Rect(content.x + 6, content.y + 6, content.w - 12, kRowH),
+                  kRowH, content.w - 12, int(indices.size()), scroll, visible);
   for (int i = 0; i < visible; ++i) {
     const int slot = scroll + i;
     if (slot >= int(indices.size())) break;
@@ -285,59 +288,80 @@ void drawDownloads(App& a, Rect body) {
 }
 
 // ---------------------------------------------------------------------------
-// Favorites — saved playlists.
+// Favorites — the entry point for NetEase playlists.
+//
+// Desktop puts online playlists under 收藏的歌单 in the sidebar and opens them as
+// /collection/netease/playlist/:id. The port keeps the same ownership: playlists
+// are reached from here, never from the cloud drive.
 // ---------------------------------------------------------------------------
 void drawFavorites(App& a, Rect body) {
   Canvas& c = *a.c;
   const Theme& th = *a.th;
   const int pad = uiContentPad();
 
-  const auto& lists = a.store.playlists();
   int y = body.y + pad;
+  summaryRow(a, body, y, "收藏的歌单", "Y 同步 · A 打开");
 
-  summaryRow(a, body, y, "自建歌单", "游戏内暂不支持新建");
-
-  if (lists.empty()) {
+  if (!a.on || !a.on->loggedIn()) {
     Rect content(body.x + pad, y, body.w - pad * 2, body.bottom() - y - pad);
-    ui::emptyState(a, content, starGlyph, "还没有歌单",
-                   "桌面版创建的收藏夹会显示在这里");
+    ui::emptyState(a, content, starGlyph, "还没有登录网易云",
+                   "在云盘页按 A 扫码登录后即可看到收藏的歌单");
     return;
   }
 
-  constexpr int tileH = 116;
-  for (int i = 0; i < int(lists.size()); ++i) {
-    if (y + tileH > body.bottom() - pad) break;
-    const SavedPlaylist& p = lists[size_t(i)];
-    Rect card(body.x + pad, y, body.w - pad * 2, tileH - 12);
-    const bool sel = i == a.folderSel;
-    c.fillRoundRect(card, 14, sel ? th.surfaceAlt : th.surface);
-    if (sel) c.strokeRoundRect(card, 14, th.accent, 2);
+  const auto& lists = a.on->playlists();
+  Rect content(body.x + pad, y, body.w - pad * 2, body.bottom() - y - pad);
 
-    Rect ic(card.x + 18, card.y + 20, 60, 60);
-    c.fillRoundRect(ic, 12, th.accentSoft);
-    icons::queue(c, ic.inset(16), th.accent);
-
-    c.drawTextEllipsis(*a.fSmall, Rect(ic.right() + 16, card.y + 22,
-                                       card.w - 220, 22),
-                       p.name, th.text);
-    char meta[96];
-    std::snprintf(meta, sizeof(meta), "%zu 首", p.paths.size());
-    c.drawText(*a.fTiny, ic.right() + 18, card.y + 50, meta, th.textDim);
-
-    // Album covers preview strip.
-    int previewX = card.right() - 250;
-    int shown = 0;
-    for (const std::string& path : p.paths) {
-      if (shown >= 3) break;
-      const int idx = a.library.indexOf(path);
-      if (idx < 0) continue;
-      const Track* t = a.trackAt(idx);
-      ui::cover(a, Rect(previewX, card.y + 22, 56, 56), t ? t->coverId : -1, 8);
-      previewX += 62;
-      ++shown;
+  if (lists.empty()) {
+    if (a.on->busy()) {
+      c.drawTextCentered(*a.fSmall, content,
+                         std::string(online::jobName(a.on->currentJob())) + "…",
+                         th.textDim);
+    } else {
+      ui::emptyState(a, content, starGlyph, "还没有读取歌单",
+                     "按 Y 同步网易云歌单");
     }
-    y += tileH;
+    return;
   }
+
+  constexpr int rowH = kPlaylistRowH;
+  const int visible = std::max(1, content.h / rowH);
+  a.folderSel = std::clamp(a.folderSel, 0, int(lists.size()) - 1);
+
+  int first = a.playlistListScroll;
+  if (a.folderSel < first) first = a.folderSel;
+  if (a.folderSel >= first + visible) first = a.folderSel - visible + 1;
+  first = std::clamp(first, 0, std::max(0, int(lists.size()) - visible));
+  a.playlistListScroll = first;
+
+  c.pushClip(content);
+  ui::publishRows(a, Rect(content.x, content.y, content.w, rowH), rowH,
+                  content.w, int(lists.size()), first, visible);
+  for (int i = 0; i < visible; ++i) {
+    const int idx = first + i;
+    if (idx >= int(lists.size())) break;
+    const netease::PlaylistSummary& pl = lists[size_t(idx)];
+    Rect row(content.x, content.y + i * rowH, content.w, rowH - 8);
+    const bool sel = idx == a.folderSel;
+    c.fillRoundRect(row, 12, sel ? th.surfaceAlt : th.surface);
+    if (sel) c.strokeRoundRect(row, 12, th.accent, 2);
+
+    Rect ic(row.x + 12, row.y + 6, row.h - 12, row.h - 12);
+    c.fillRoundRect(ic, 10, th.accentSoft);
+    icons::queue(c, ic.inset(10), th.accent);
+
+    c.drawTextEllipsis(*a.fSmall, Rect(ic.right() + 14, row.y + 10, row.w - 180, 22),
+                       pl.name.empty() ? "未命名歌单" : pl.name, th.text);
+    char meta[64];
+    std::snprintf(meta, sizeof(meta), "%d 首", pl.trackCount);
+    c.drawText(*a.fTiny, ic.right() + 14, row.y + 32, meta, th.textDim);
+
+    if (sel) {
+      c.drawTextRight(*a.fTiny, Rect(row.right() - 80, row.y + (row.h - 18) / 2, 66, 18),
+                      "A 打开", th.accent);
+    }
+  }
+  c.popClip();
 }
 
 }  // namespace spn

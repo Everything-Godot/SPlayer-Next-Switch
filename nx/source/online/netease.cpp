@@ -464,6 +464,48 @@ bool Client::userPlaylists(std::vector<PlaylistSummary>& out, std::string& err) 
   return true;
 }
 
+// --- cloud drive ------------------------------------------------------------
+// `/api/v1/cloud` returns { count, size, maxSize, hasMore, data:[{songId,
+// fileName, fileSize, simpleSong}] }. The playable entry is `simpleSong`, which
+// carries the same shape search results use, so songFromJson handles it.
+bool Client::userCloud(int offset, int limit, std::vector<Song>& out, std::string& err) {
+  out.clear();
+  if (!session_.loggedIn()) {
+    err = "需要登录";
+    return false;
+  }
+  if (limit <= 0) limit = 200;
+  if (limit > 500) limit = 500;
+  const std::string raw = "{\"offset\":" + std::to_string(offset) + ",\"limit\":" +
+                          std::to_string(limit);
+  std::string reply;
+  if (!eapi("/api/v1/cloud", withHeader(raw), reply, err)) return false;
+
+  json::Value v;
+  if (!json::parse(reply, v)) {
+    err = "无法解析云盘";
+    return false;
+  }
+  const json::Value& data = v.get("data");
+  if (!data.isArray()) {
+    // `code: 200` with no data means an empty cloud, not a failure.
+    if (v.get("code").asInt() == 200) return true;
+    err = "云盘返回异常";
+    return false;
+  }
+  for (size_t i = 0; i < data.size(); ++i) {
+    const json::Value& item = data.at(i);
+    const json::Value& s = item.get("simpleSong");
+    if (s.isNull()) continue;
+    Song song = songFromJson(s);
+    // Cloud uploads sometimes carry an empty album name; the file name is the
+    // only human-readable hint, so fall back to it.
+    if (song.name.empty()) song.name = item.get("fileName").asString();
+    out.push_back(std::move(song));
+  }
+  return true;
+}
+
 bool Client::playlistDetail(int64_t playlistId, std::vector<Song>& out,
                            PlaylistSummary* meta, std::string& err) {
   out.clear();

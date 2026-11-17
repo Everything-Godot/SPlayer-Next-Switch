@@ -19,6 +19,7 @@
 #include "spn/netease.hpp"
 #include "spn/online_service.hpp"
 #include "spn/store.hpp"
+#include "spn/touch.hpp"
 #include "spn/types.hpp"
 #include "spn/ui.hpp"
 #include "spn/widgets.hpp"
@@ -53,6 +54,7 @@ int* selectionFor(App& a) {
     case Page::Folders: return &a.folderSel;
     case Page::Cloud: return &a.cloudSel;
     case Page::Streaming: return &a.onlineSel;
+    case Page::Playlist: return &a.playlistSel;
     case Page::Search: return &a.searchSel;
     case Page::Settings: return &a.settingSel;
     default: return nullptr;
@@ -81,8 +83,11 @@ int itemCountFor(App& a) {
     }
     case Page::History: return int(a.store.history().size());
     case Page::Downloads: return int(a.library.tracks().size());
-    case Page::Favorites: return int(a.store.playlists().size());
+    case Page::Favorites: return int(a.on ? a.on->playlists().size() : 0);
     case Page::Folders: return int(a.library.folders().size());
+    case Page::Cloud: return int(a.on ? a.on->cloudSongs().size() : 0);
+    case Page::Streaming: return int(a.on ? a.on->songs().size() : 0);
+    case Page::Playlist: return int(a.on ? a.on->playlistSongs().size() : 0);
     case Page::Stats: return 0;
     case Page::Settings: return settingsRowCount();
     case Page::Search: return int(searchResults(a).size());
@@ -167,7 +172,8 @@ bool pageIsList(Page p) {
   switch (p) {
     case Page::Stats: return false;
     case Page::Player: return false;
-    case Page::Favorites: return false;
+    // Favorites is a list of playlists now, so it consumes Up/Down like any
+    // other list page.
     default: return true;
   }
 }
@@ -195,12 +201,12 @@ void pumpOnline() {
   // path touches the audio engine, so local playback stays untouched.
   std::string ready = gOnline.takeReadyPath();
   if (!ready.empty()) {
-    g.playPath(ready);
+    // playFile() instead of playPath(): the cached track lives outside the
+    // scanned library, and playPath() would reject it with "曲库里没有这首曲子".
+    const online::ReadyTrack info = gOnline.takeReadyTrack();
     const std::string lrc = gOnline.takeLyrics();
-    if (!lrc.empty()) {
-      g.lyrics.parse(lrc);
-      g.toast("正在播放：" + std::string("在线曲目"));
-    }
+    g.playFile(ready, info.name, info.artist, info.album, lrc);
+    g.toast("正在播放：" + (info.name.empty() ? std::string("在线曲目") : info.name));
     g.dirty = true;
   } else {
     // Lyrics without a path happen when the track was already cached; drain
@@ -237,6 +243,11 @@ void render() {
   const int bodyBottom = H - barH;
   const Rect body(content.x, bodyTop, content.w, bodyBottom - bodyTop);
 
+  // Drop the previous frame's row geometry before drawing. Pages that render a
+  // list publish their own; a page that does not (home, stats, player) must not
+  // inherit the last page's tappable rows.
+  ui::clearRows(g);
+
   switch (g.page) {
     case Page::Home: drawHome(g, body); break;
     case Page::Library: drawLibrary(g, body); break;
@@ -250,6 +261,7 @@ void render() {
     case Page::Stats: drawStats(g, body); break;
     case Page::Cloud: drawCloud(g, body); break;
     case Page::Streaming: drawStreaming(g, body); break;
+    case Page::Playlist: drawPlaylistPage(g, body); break;
     case Page::Search: drawSearch(g, body); break;
     case Page::Settings: drawSettings(g, body); break;
     case Page::Player: drawPlayer(g, body); break;
@@ -282,68 +294,115 @@ void onTrackEnd(void*) {
   g.nextTrack(true);
 }
 
+// The "activate" action for the focused row. Shared by the A button and by a
+// tap, so both paths can never drift apart.
+void activateCurrent() {
+  if (g.page == Page::Settings) {
+    activateSetting(g, g.settingSel);
+    return;
+  }
+
+  if (g.page == Page::Cloud) {
+    // Cloud drive: logged out -> start the QR flow; logged in -> read the
+    // user's uploaded songs (this page never lists playlists).
+    if (!g.on) return;
+    if (!g.on->loggedIn()) {
+      if (g.on->loginState() == online::LoginState::LoggedOut &&
+          g.on->loginUrl().empty()) {
+        g.on->beginLogin();
+        g.toast("正在获取登录二维码");
+      }
+      return;
+    }
+    if (g.on->cloudSongs().empty()) {
+      g.on->loadCloud();
+      g.toast("正在读取云盘");
+      return;
+    }
+    if (g.on->playCloudSong(g.cloudSel)) g.toast("正在解析音源");
+    else g.toast(g.on->error().empty() ? "上一项任务还没结束" : g.on->error());
+    return;
+  }
+
+  if (g.page == Page::Favorites) {
+    // The playlist list. A opens the highlighted playlist in its own page.
+    if (!g.on) return;
+    if (!g.on->loggedIn()) {
+      if (g.on->loginState() == online::LoginState::LoggedOut &&
+          g.on->loginUrl().empty()) {
+        g.on->beginLogin();
+        g.toast("正在获取登录二维码");
+      }
+      return;
+    }
+    if (g.on->playlists().empty()) {
+      g.on->loadPlaylists();
+      g.toast("正在读取歌单");
+      return;
+    }
+    if (g.folderSel >= 0 && g.folderSel < int(g.on->playlists().size())) {
+      g.on->openPlaylist(g.folderSel);
+      g.playlistSel = 0;
+      g.playlistScroll = 0;
+      g.goTo(Page::Playlist);
+      g.toast("正在打开歌单");
+    }
+    return;
+  }
+
+  if (g.page == Page::Playlist) {
+    if (!g.on) return;
+    if (g.on->playPlaylistSong(g.playlistSel)) g.toast("正在解析音源");
+    else g.toast(g.on->error().empty() ? "上一项任务还没结束" : g.on->error());
+    return;
+  }
+
+  if (g.page == Page::Streaming) {
+    // A plays the highlighted search result.
+    if (g.on && g.on->loggedIn() && g.onlineSel >= 0 &&
+        g.onlineSel < int(g.on->songs().size())) {
+      if (g.on->playSong(g.onlineSel)) g.toast("正在解析音源");
+      else g.toast(g.on->error().empty() ? "上一项任务还没结束" : g.on->error());
+    } else if (g.on && !g.on->loggedIn()) {
+      g.on->beginLogin();
+      g.toast("正在获取登录二维码");
+    }
+    return;
+  }
+
+  if (g.page == Page::Stats) {
+    g.goTo(Page::Player);
+    return;
+  }
+  if (g.page == Page::Player) {
+    // The player screen has no list; activate is the play/pause toggle there.
+    g.togglePlayPause();
+    return;
+  }
+
+  const int idx = selectedTrackIndex(g);
+  if (idx < 0) return;
+  if (idx == g.playingIndex && !g.playingOnline && g.audio.isLoaded()) {
+    g.togglePlayPause();
+  } else {
+    g.playIndex(idx);
+  }
+}
+
 void handleInput(u64 kDown, PadState& pad) {
   auto pressed = [&](uint64_t mask) { return (kDown & mask) != 0; };
 
   // --- global transport ----------------------------------------------------
   if (pressed(HidNpadButton_A)) {
-    if (g.page == Page::Settings) {
-      activateSetting(g, g.settingSel);
-    } else if (g.page == Page::Cloud) {
-      // Cloud: logged out -> start the QR flow; logged in -> open the selected
-      // playlist (or load the list when it is still empty).
-      if (!g.on) {
-        // Online layer missing: nothing to do.
-      } else if (!g.on->loggedIn()) {
-        if (g.on->loginState() == online::LoginState::LoggedOut &&
-            g.on->loginUrl().empty()) {
-          g.on->beginLogin();
-          g.toast("正在获取登录二维码");
-        }
-      } else if (g.on->playlists().empty()) {
-        g.on->loadPlaylists();
-        g.toast("正在读取歌单");
-      } else {
-        g.on->openPlaylist(g.cloudSel);
-        g.onlineTitle = g.on->playlists()[size_t(g.cloudSel)].name;
-        g.onlineSel = 0;
-        g.onlineScroll = 0;
-        g.toast("正在打开歌单");
-      }
-    } else if (g.page == Page::Streaming) {
-      // Streaming: A plays the highlighted search result.
-      if (g.on && g.on->loggedIn() && g.onlineSel >= 0 &&
-          g.onlineSel < int(g.on->songs().size())) {
-        if (g.on->playSong(g.onlineSel)) {
-          g.toast("正在解析音源");
-        } else {
-          g.toast(g.on->error().empty() ? "上一项任务还没结束" : g.on->error());
-        }
-      } else if (g.on && !g.on->loggedIn()) {
-        g.on->beginLogin();
-        g.toast("正在获取登录二维码");
-      }
-    } else if (g.page == Page::Stats) {
-      g.goTo(Page::Player);
-    } else if (g.page == Page::Player) {
-      // The player screen has no list; A is the play/pause toggle there.
-      g.togglePlayPause();
-    } else {
-      const int idx = selectedTrackIndex(g);
-      if (idx >= 0) {
-        if (idx == g.playingIndex && g.audio.isLoaded()) {
-          g.togglePlayPause();
-        } else {
-          g.playIndex(idx);
-        }
-      }
-    }
+    activateCurrent();
     g.dirty = true;
   }
 
   if (pressed(HidNpadButton_B)) {
     if (g.page == Page::Player) {
       g.goTo(g.lastPage);
+    } else if (g.page == Page::Playlist) {
+      g.goTo(Page::Favorites);
     } else if (g.page == Page::Search) {
       g.page = Page::Library;
     }
@@ -352,13 +411,30 @@ void handleInput(u64 kDown, PadState& pad) {
 
   if (pressed(HidNpadButton_X)) g.nextTrack(true);
   if (pressed(HidNpadButton_Y)) {
-    // Y toggles the like state of the highlighted track.
-    const int idx = selectedTrackIndex(g);
-    const Track* t = g.trackAt(idx);
-    if (t) {
-      g.store.toggleLiked(t->path);
-      g.toast(g.store.isLiked(t->path) ? "已加入我喜欢的音乐" : "已取消收藏");
-      g.dirty = true;
+    // Y means "refresh this page's content" on the online pages -- that is what
+    // their headers advertise (云盘: Y 刷新, 我的收藏: Y 同步). Only the local
+    // lists use Y for the like toggle.
+    if (g.page == Page::Cloud) {
+      if (g.on && g.on->loggedIn()) {
+        g.on->loadCloud();
+        g.toast("正在读取云盘");
+        g.dirty = true;
+      }
+    } else if (g.page == Page::Favorites) {
+      if (g.on && g.on->loggedIn()) {
+        g.on->loadPlaylists();
+        g.toast("正在同步歌单");
+        g.dirty = true;
+      }
+    } else {
+      // Everywhere else Y toggles the like state of the highlighted track.
+      const int idx = selectedTrackIndex(g);
+      const Track* t = g.trackAt(idx);
+      if (t) {
+        g.store.toggleLiked(t->path);
+        g.toast(g.store.isLiked(t->path) ? "已加入我喜欢的音乐" : "已取消收藏");
+        g.dirty = true;
+      }
     }
   }
 
@@ -500,9 +576,14 @@ void handleInput(u64 kDown, PadState& pad) {
     g.dirty = true;
   }
 
-  // --- left stick: volume --------------------------------------------------
+  // --- left stick: volume ---------------------------------------------------
+  // Volume is only on the stick while the player page is open. Making it global
+  // meant a stray stick deflection anywhere in the UI changed the volume, which
+  // is disruptive when the stick is also used to nudge lists.
   const HidAnalogStickState stick = padGetStickPos(&pad, 0);
-  if (std::abs(stick.x) < 12000 && (stick.y < -16000 || stick.y > 16000)) {
+  const bool volumePage = g.page == Page::Player;
+  if (volumePage && std::abs(stick.x) < 12000 &&
+      (stick.y < -16000 || stick.y > 16000)) {
     static int accum = 0;
     static u64 lastTick = 0;
     const u64 nowTick = armGetSystemTick();
@@ -520,6 +601,56 @@ void handleInput(u64 kDown, PadState& pad) {
       g.dirty = true;
     }
   }
+}
+// Applies one tap. The hit-testing itself lives in touch.cpp so it can be
+// exercised on the host; this function only turns a Hit into app mutations.
+void handleTouch(int x, int y, int screenW, int screenH) {
+  const touch::Hit hit = touch::hitTest(g, x, y, screenW, screenH);
+  switch (hit.action) {
+    case touch::Action::None:
+      return;
+
+    case touch::Action::Page:
+      g.goTo(hit.page);
+      break;
+
+    case touch::Action::Search:
+      g.goTo(Page::Search);
+      break;
+
+    case touch::Action::BodyActivate:
+      // Move the cursor to the tapped row, then run the same activate path the
+      // A button uses. On the online pages the row is what A would have acted
+      // on, so one tap opens / plays exactly like the controller does.
+      if (int* sel = selectionFor(g)) {
+        *sel = hit.index;
+      }
+      activateCurrent();
+      break;
+
+    case touch::Action::PlayerBar:
+      g.togglePlayPause();
+      break;
+
+    case touch::Action::Next:
+      g.nextTrack(true);
+      break;
+
+    case touch::Action::Prev:
+      g.nextTrack(false);
+      break;
+
+    case touch::Action::PlayerPage:
+      if (g.page != Page::Player) g.goTo(Page::Player);
+      break;
+
+    case touch::Action::Back:
+      if (g.page == Page::Player) g.goTo(g.lastPage);
+      else if (g.page == Page::Playlist) g.goTo(Page::Favorites);
+      else if (g.page == Page::Search) g.goTo(Page::Library);
+      break;
+  }
+  g.dirty = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -664,10 +795,19 @@ int main(int argc, char** argv) {
     romfsExit();
     return 1;
   }
-
   padConfigureInput(1, HidNpadStyleSet_NpadStandard);
   PadState pad;
   padInitializeDefault(&pad);
+
+  // Touch needs its own init; a failure only disables touch, the pads still work.
+  const bool touchOk = R_SUCCEEDED(hidInitializeHidCommonSampling());
+  if (!touchOk) {
+    printf("hid touch init failed (touch disabled)\n");
+  }
+
+  // Edge detection: act on the frame the finger goes down, not every frame it
+  // stays down, otherwise a single tap would fire the action dozens of times.
+  bool touchWasDown = false;
 
   // Fixed-timestep-ish frame pacing: the UI redraws whenever state is dirty,
   // plus a 4 Hz heartbeat so progress bars and lyric scroll stay smooth.
@@ -686,6 +826,19 @@ int main(int argc, char** argv) {
 
     handleInput(kDown, pad);
     pumpOnline();
+
+    // --- touch --------------------------------------------------------------
+    // hidTouchScreenState only reports a point while a finger is down, so the
+    // down->up edge is what marks a tap.
+    if (touchOk) {
+      HidTouchScreenState ts{};
+      const int count = hidGetTouchScreenStates(&ts, 1);
+      const bool down = count > 0 && ts.count > 0;
+      if (down && !touchWasDown) {
+        handleTouch(ts.touches[0].x, ts.touches[0].y, 1280, 720);
+      }
+      touchWasDown = down;
+    }
 
     // Accumulate listening time while audio actually advances.
     if (g.audio.isPlaying()) {
@@ -729,6 +882,7 @@ int main(int argc, char** argv) {
   g.store.save();
   g.audio.shutdown();
   fbuf.release();
+  if (touchOk) hidExit();
   if (netOk) socketExit();
   romfsExit();
   return 0;

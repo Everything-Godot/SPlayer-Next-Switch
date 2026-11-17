@@ -40,11 +40,21 @@ enum class Job {
   Search,
   Playlists,
   PlaylistOpen,
+  CloudList,
   Resolve,   // songUrl + download
   Lyrics,
 };
 
 const char* jobName(Job j);
+
+// Metadata for a track that just finished caching. Travels with the cache path
+// so the player bar can show a name instead of "在线曲目".
+struct ReadyTrack {
+  std::string name;
+  std::string artist;
+  std::string album;
+  int64_t id = 0;
+};
 
 class Service {
  public:
@@ -85,15 +95,34 @@ class Service {
   const std::vector<netease::PlaylistSummary>& playlists() const { return playlists_; }
   void openPlaylist(int index);
 
+  // --- playlist contents ---------------------------------------------------
+  // Kept strictly separate from songs(): a playlist page must not be clobbered
+  // by typing in the search box, and a search must not look like "the playlist
+  // I just opened". Each list has its own play entry point.
+  const std::vector<netease::Song>& playlistSongs() const { return playlistSongs_; }
+  const std::string& playlistName() const { return playlistName_; }
+  int64_t playlistId() const { return playlistId_; }
+
+  // --- cloud drive ---------------------------------------------------------
+  // The user's uploaded songs (desktop: pages/Cloud.vue). This is what the
+  // sidebar entry "云盘" means; it is *not* the playlist list.
+  void loadCloud();
+  const std::vector<netease::Song>& cloudSongs() const { return cloudSongs_; }
+  bool playCloudSong(int index);
+
   // --- playback -----------------------------------------------------------
   // Resolves a song and downloads it; `onReady` path arrives via
   // takeReadyPath(). Returns false when a different job is already running.
   bool playSong(int index);
+  bool playPlaylistSong(int index);
   // Song index whose download is in flight, or -1.
   int pendingSong() const { return pendingSong_.load(); }
   float downloadProgress() const { return cache_.progress(); }
   // Moves a finished download path out; empty when there is nothing new.
   std::string takeReadyPath();
+  // Metadata of the track takeReadyPath() just handed out. Consumed by the same
+  // caller in the same frame, so it is always in sync with that path.
+  ReadyTrack takeReadyTrack();
   // Lyrics text for the song that finished resolving, consumed once.
   std::string takeLyrics();
 
@@ -108,6 +137,7 @@ class Service {
   void runSearch();
   void runPlaylists();
   void runPlaylistOpen();
+  void runCloud();
   void runResolve();
   void start(std::thread t);
 
@@ -119,6 +149,8 @@ class Service {
     std::string nickname;
     std::string readyPath;
     std::string lyrics;
+    ReadyTrack readyTrack;
+    bool hasReadyTrack = false;
     std::string error;
     LoginState login = LoginState::LoggedOut;
     bool hasLogin = false;
@@ -126,6 +158,11 @@ class Service {
     bool hasSongs = false;
     std::vector<netease::PlaylistSummary> playlists;
     bool hasPlaylists = false;
+    std::vector<netease::Song> playlistSongs;
+    bool hasPlaylistSongs = false;
+    std::string playlistName;
+    std::vector<netease::Song> cloudSongs;
+    bool hasCloudSongs = false;
   };
 
   void publishStaged();
@@ -146,7 +183,11 @@ class Service {
   std::string query_;
   std::vector<netease::Song> songs_;
   std::vector<netease::PlaylistSummary> playlists_;
+  std::vector<netease::Song> playlistSongs_;
+  std::string playlistName_;
+  std::vector<netease::Song> cloudSongs_;
   std::string readyPath_;
+  ReadyTrack readyTrack_;
   std::string lyrics_;
   std::string error_;
 

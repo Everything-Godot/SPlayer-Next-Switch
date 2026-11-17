@@ -99,6 +99,8 @@ class Client {
 
   // User playlists (needs login; returns false with an empty list otherwise).
   bool userPlaylists(std::vector<PlaylistSummary>& out, std::string& err);
+  // Cloud drive (用户云盘): songs the user uploaded. Distinct from playlists.
+  bool userCloud(int offset, int limit, std::vector<Song>& out, std::string& err);
   bool playlistDetail(int64_t playlistId, std::vector<Song>& out, PlaylistSummary* meta,
                       std::string& err);
 

@@ -48,5 +48,18 @@ Rect heartButton(App& a, Rect r, bool liked);
 // "--:--"-safe duration label.
 std::string durationLabel(double seconds);
 
+// Publishes the row geometry of the list a page is about to draw, so the touch
+// hit-tester can resolve a tap against real pixels instead of mirroring layout
+// constants. Call it once per frame, right before the loop that draws the rows.
+// `scroll` is the index of the first visible item and `visible` the number of
+// rows that fit; pages pass the same numbers they clamp their cursor against.
+void publishRows(App& a, Rect topLeft, int rowH, int width, int count, int scroll,
+                 int visible);
+// Same, for a grid: `cols` columns of pitch `colW`.
+void publishGrid(App& a, Rect topLeft, int rowH, int width, int count, int scroll,
+                 int visibleRows, int cols, int colW);
+// Clears the published geometry (used for pages with nothing tappable).
+void clearRows(App& a);
+
 }  // namespace ui
 }  // namespace spn

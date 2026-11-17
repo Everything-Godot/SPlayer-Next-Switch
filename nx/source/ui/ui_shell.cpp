@@ -34,6 +34,12 @@ int uiTopBarHeight() { return kTopBarH; }
 int uiPlayerBarHeight() { return kPlayerBarH; }
 int uiContentPad() { return kContentPad; }
 
+Rect uiBodyRect(int screenW, int screenH) {
+  const int bodyTop = kTopBarH;
+  const int bodyBottom = screenH - kPlayerBarH;
+  return Rect(kSidebarW, bodyTop, screenW - kSidebarW, bodyBottom - bodyTop);
+}
+
 // ---------------------------------------------------------------------------
 // Pages
 // ---------------------------------------------------------------------------
@@ -54,6 +60,7 @@ const char* pageTitle(Page p) {
     case Page::Search: return "搜索";
     case Page::Settings: return "全局设置";
     case Page::Player: return "正在播放";
+    case Page::Playlist: return "歌单";
     default: return "";
   }
 }
@@ -75,6 +82,7 @@ const char* pageSubtitle(Page p) {
     case Page::Search: return "输入关键字过滤曲目";
     case Page::Settings: return "外观、播放与按键";
     case Page::Player: return "歌词与封面";
+    case Page::Playlist: return "歌单内容";
     default: return "";
   }
 }
@@ -138,6 +146,7 @@ void App::goTo(Page p) {
 void App::playIndex(int index) {
   const Track* t = trackAt(index);
   if (!t) return;
+  playingOnline = false;  // back to a library track
   playingIndex = index;
   audio.play(t->path);
   lyrics = Lyrics();
@@ -156,6 +165,45 @@ void App::playPath(const std::string& path) {
     return;
   }
   playIndex(idx);
+}
+
+void App::playFile(const std::string& path, const std::string& title,
+                   const std::string& artist, const std::string& album,
+                   const std::string& lyricText) {
+  if (path.empty()) return;
+
+  // An online track is cached outside the scanned library, so playIndex()'s
+  // index-based bookkeeping cannot reach it. Give it a synthetic Track and
+  // drive the engine directly; `playingIndex` stays -1 so nextTrack() does not
+  // wander into the local queue while an online track is playing.
+  const int idx = library.indexOf(path);
+  if (idx >= 0) {
+    playIndex(idx);
+    return;
+  }
+
+  Track t;
+  t.path = path;
+  t.title = title.empty() ? "在线曲目" : title;
+  t.artist = artist;
+  t.album = album;
+  t.coverId = -1;
+
+  playingIndex = -1;
+  onlineTrack = t;
+  playingOnline = true;
+  audio.play(path);
+
+  lyrics = Lyrics();
+  if (!lyricText.empty()) {
+    lyrics.parse(lyricText);
+  } else {
+    const std::string lrc = Library::findLyricFile(path);
+    if (!lrc.empty()) lyrics.loadFile(lrc);
+  }
+  lyricScroll = 0.0;
+  store.recordPlay(path, uint64_t(now));
+  dirty = true;
 }
 
 void App::togglePlayPause() {

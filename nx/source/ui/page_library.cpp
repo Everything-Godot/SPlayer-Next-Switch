@@ -92,6 +92,10 @@ void drawLibrary(App& a, Rect body) {
   c.fillRoundRect(panel, 14, th.surface);
   c.pushClip(Rect(panel.x + 4, panel.y + 6, panel.w - 8, panel.h - 12));
 
+  // Publish before drawing so a tap on this frame resolves to these rows.
+  ui::publishRows(a, Rect(panel.x + 6, panel.y + 6, panel.w - 12, rowH),
+                  rowH, panel.w - 12, int(tracks.size()), a.libScroll, visible);
+
   for (int i = 0; i < visible; ++i) {
     const int idx = a.libScroll + i;
     if (idx >= int(tracks.size())) break;
@@ -148,6 +152,10 @@ void drawAlbums(App& a, Rect body) {
               tileW, tileW + 48);
     ui::albumTile(a, tile, albums[size_t(first + i)], first + i == a.albumSel);
   }
+  // Grid geometry: rows of `cols` tiles, first page-relative item at `first`.
+  ui::publishGrid(a, Rect(content.x, content.y, content.w, tileW + 56),
+                  tileW + 56, content.w, int(albums.size()), first, rows, cols,
+                  tileW + gap);
 }
 
 // ---------------------------------------------------------------------------
@@ -180,6 +188,9 @@ void drawArtists(App& a, Rect body) {
   a.artistSel = std::clamp(a.artistSel, 0, int(artists.size()) - 1);
   const int first =
       std::max(0, std::min(a.artistSel, int(artists.size()) - visible));
+
+  ui::publishRows(a, Rect(content.x, content.y, content.w, rowH), rowH,
+                  content.w, int(artists.size()), first, visible);
 
   for (int i = 0; i < visible; ++i) {
     const int idx = first + i;

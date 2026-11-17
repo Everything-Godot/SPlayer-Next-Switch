@@ -91,6 +91,9 @@ void drawFolders(App& a, Rect body) {
   constexpr int rowH = 48;
   const int visible = std::max(1, (listRect.h - 12) / rowH);
   const int first = std::max(0, std::min(a.folderSel, int(dirs.size()) - visible));
+  ui::publishRows(a, Rect(listRect.x + 6, listRect.y + 6, listRect.w - 12, rowH),
+                  rowH, listRect.w - 12, int(dirs.size()), first, visible);
+
 
   for (int i = 0; i < visible; ++i) {
     const int idx = first + i;
@@ -322,6 +325,9 @@ void drawSearch(App& a, Rect body) {
 
   c.fillRoundRect(content, 14, th.surface);
   c.pushClip(Rect(content.x + 4, content.y + 6, content.w - 8, content.h - 12));
+  ui::publishRows(a, Rect(content.x + 6, content.y + 6, content.w - 12, rowH),
+                  rowH, content.w - 12, int(hits.size()), first, visible);
+
   for (int i = 0; i < visible; ++i) {
     const int slot = first + i;
     if (slot >= int(hits.size())) break;

@@ -179,5 +179,48 @@ Rect heartButton(App& a, Rect r, bool liked) {
   return r;
 }
 
+// --- row geometry publishing ------------------------------------------------
+// The touch layer asks "which row is at (x, y)". Answering that from hard-coded
+// copies of the layout was wrong on every page whose header height differed
+// from the guess, and it silently rotted whenever a page gained a row. Pages
+// publish what they actually drew instead.
+void publishRows(App& a, Rect topLeft, int rowH, int width, int count, int scroll,
+                 int visible) {
+  if (rowH <= 0 || count <= 0) {
+    clearRows(a);
+    return;
+  }
+  a.rows.valid = true;
+  a.rows.top = topLeft.y;
+  a.rows.rowH = rowH;
+  a.rows.left = topLeft.x;
+  a.rows.width = width;
+  a.rows.count = count;
+  a.rows.scroll = scroll;
+  a.rows.visible = visible;
+  a.rows.cols = 1;
+  a.rows.colW = 0;
+}
+
+void publishGrid(App& a, Rect topLeft, int rowH, int width, int count, int scroll,
+                 int visibleRows, int cols, int colW) {
+  if (rowH <= 0 || count <= 0 || cols <= 0) {
+    clearRows(a);
+    return;
+  }
+  a.rows.valid = true;
+  a.rows.top = topLeft.y;
+  a.rows.rowH = rowH;
+  a.rows.left = topLeft.x;
+  a.rows.width = width;
+  a.rows.count = count;
+  a.rows.scroll = scroll;
+  a.rows.visible = visibleRows;
+  a.rows.cols = cols;
+  a.rows.colW = colW;
+}
+
+void clearRows(App& a) { a.rows = App::RowGeometry{}; }
+
 }  // namespace ui
 }  // namespace spn

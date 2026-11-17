@@ -21,8 +21,13 @@ TOOLS     := $(DEVKITPRO)/tools/bin
 
 TARGET      := SPlayer-Next
 APP_TITLE   := SPlayer-Next
-APP_AUTHOR  := Everything-Godot
+APP_AUTHOR  := Baymaxawa
 APP_VERSION := 1.2.1
+
+# Launcher icon. elf2nro embeds it into the NRO's asset section; nacptool does
+# not handle icons at all (only name/author/version/titleid). Without this the
+# NRO has an empty icon region and hbmenu falls back to a blank tile.
+APP_ICON := icon.jpg
 
 BUILD    := build
 SOURCES  := source
@@ -86,13 +91,16 @@ $(BUILD)/$(TARGET).elf: $(OFILES)
 	@mkdir -p $(BUILD)
 	$(LD) $(OFILES) $(LDFLAGS) $(LIBS) -o $@
 
-$(BUILD)/$(TARGET).nacp:
+$(BUILD)/$(TARGET).nacp: Makefile
 	@mkdir -p $(BUILD)
 	$(TOOLS)/nacptool --create "$(APP_TITLE)" "$(APP_AUTHOR)" "$(APP_VERSION)" $@
 
-$(BUILD)/$(TARGET).nro: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).nacp
-	$(TOOLS)/elf2nro $< $@ --nacp=$(BUILD)/$(TARGET).nacp --romfsdir=$(ROMFS)
+$(BUILD)/$(TARGET).nro: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).nacp $(APP_ICON)
+	$(TOOLS)/elf2nro $< $@ --nacp=$(BUILD)/$(TARGET).nacp --romfsdir=$(ROMFS) \
+		--icon=$(APP_ICON)
 	@echo "built: $@"
+	@echo "  icon  : $(APP_ICON) ($$(wc -c < $(APP_ICON)) bytes)"
+	@echo "  author: $(APP_AUTHOR)"
 
 nro: $(BUILD)/$(TARGET).nro
 nacp: $(BUILD)/$(TARGET).nacp

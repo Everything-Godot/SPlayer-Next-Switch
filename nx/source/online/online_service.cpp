@@ -47,6 +47,7 @@ const char* jobName(Job j) {
     case Job::Search: return "搜索中";
     case Job::Playlists: return "读取歌单";
     case Job::PlaylistOpen: return "打开歌单";
+    case Job::CloudList: return "读取云盘";
     case Job::Resolve: return "解析音源";
     case Job::Lyrics: return "读取歌词";
   }
@@ -84,6 +85,20 @@ void Service::publishStaged() {
     stage_.playlists.clear();
     stage_.hasPlaylists = false;
   }
+  if (stage_.hasPlaylistSongs) {
+    playlistSongs_.swap(stage_.playlistSongs);
+    stage_.playlistSongs.clear();
+    stage_.hasPlaylistSongs = false;
+  }
+  if (stage_.hasCloudSongs) {
+    cloudSongs_.swap(stage_.cloudSongs);
+    stage_.cloudSongs.clear();
+    stage_.hasCloudSongs = false;
+  }
+  if (!stage_.playlistName.empty()) {
+    playlistName_.swap(stage_.playlistName);
+    stage_.playlistName.clear();
+  }
   if (!stage_.loginUrl.empty()) {
     loginUrl_.swap(stage_.loginUrl);
     stage_.loginUrl.clear();
@@ -95,6 +110,11 @@ void Service::publishStaged() {
   if (!stage_.readyPath.empty()) {
     readyPath_.swap(stage_.readyPath);
     stage_.readyPath.clear();
+  }
+  if (stage_.hasReadyTrack) {
+    readyTrack_ = stage_.readyTrack;
+    stage_.readyTrack = ReadyTrack{};
+    stage_.hasReadyTrack = false;
   }
   if (!stage_.lyrics.empty()) {
     lyrics_.swap(stage_.lyrics);
@@ -295,9 +315,47 @@ void Service::runPlaylistOpen() {
     job_.store(Job::None);
     return;
   }
-  stage_.songs = std::move(out);
-  stage_.hasSongs = true;
+  // Lands in playlistSongs_, never in songs_: the search results stay intact.
+  stage_.playlistName = meta.name;
+  stage_.playlistSongs = std::move(out);
+  stage_.hasPlaylistSongs = true;
   job_.store(Job::None);
+}
+
+void Service::loadCloud() {
+  if (busy()) return;
+  stage_ = Staged{};
+  error_.clear();
+  job_.store(Job::CloudList);
+  start(std::thread([this] { runCloud(); }));
+}
+
+void Service::runCloud() {
+  std::vector<netease::Song> out;
+  std::string err;
+  if (!client_.userCloud(0, 500, out, err)) {
+    stage_.error = err.empty() ? "读取云盘失败" : err;
+    stage_.hasCloudSongs = true;
+    job_.store(Job::None);
+    return;
+  }
+  stage_.cloudSongs = std::move(out);
+  stage_.hasCloudSongs = true;
+  job_.store(Job::None);
+}
+
+bool Service::playCloudSong(int index) {
+  if (busy()) return false;
+  if (index < 0 || index >= int(cloudSongs_.size())) return false;
+
+  stage_ = Staged{};
+  error_.clear();
+  pendingIndex_ = index;
+  pendingSong_.store(index);
+  pendingSongData_ = cloudSongs_[size_t(index)];
+  job_.store(Job::Resolve);
+  start(std::thread([this] { runResolve(); }));
+  return true;
 }
 
 // --- playback --------------------------------------------------------------
@@ -318,13 +376,36 @@ bool Service::playSong(int index) {
   return true;
 }
 
+bool Service::playPlaylistSong(int index) {
+  if (busy()) return false;
+  if (index < 0 || index >= int(playlistSongs_.size())) return false;
+
+  stage_ = Staged{};
+  error_.clear();
+  pendingIndex_ = index;
+  pendingSong_.store(index);
+  pendingSongData_ = playlistSongs_[size_t(index)];
+  job_.store(Job::Resolve);
+  start(std::thread([this] { runResolve(); }));
+  return true;
+}
+
 void Service::runResolve() {
   const netease::Song song = pendingSongData_;
+
+  // Metadata travels with the path so the UI never has to guess a name.
+  ReadyTrack meta;
+  meta.name = song.name;
+  meta.artist = song.artist;
+  meta.album = song.album;
+  meta.id = song.id;
 
   // Already cached? Skip both the API call and the download.
   std::string cached;
   if (TrackCache::lookup(song.id, cached)) {
     stage_.readyPath = cached;
+    stage_.readyTrack = meta;
+    stage_.hasReadyTrack = true;
     pendingSong_.store(-1);
     job_.store(Job::None);
     return;
@@ -360,6 +441,8 @@ void Service::runResolve() {
     const CacheState st = cache_.state();
     if (st == CacheState::Ready) {
       stage_.readyPath = cache_.resultPath();
+      stage_.readyTrack = meta;
+      stage_.hasReadyTrack = true;
       break;
     }
     if (st == CacheState::Failed) {
@@ -387,6 +470,12 @@ void Service::runResolve() {
 std::string Service::takeReadyPath() {
   std::string out;
   out.swap(readyPath_);
+  return out;
+}
+
+ReadyTrack Service::takeReadyTrack() {
+  ReadyTrack out = readyTrack_;
+  readyTrack_ = ReadyTrack{};
   return out;
 }
 

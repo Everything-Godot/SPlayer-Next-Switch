@@ -171,6 +171,8 @@ void drawSettings(App& a, Rect body) {
   c.fillRoundRect(panel, 16, th.surface);
 
   c.pushClip(Rect(panel.x + 2, panel.y + 4, panel.w - 4, panel.h - 8));
+  ui::publishRows(a, Rect(panel.x + 6, panel.y + 6, panel.w - 12, rowH), rowH,
+                  panel.w - 12, total, first, visible);
   for (int i = 0; i < visible; ++i) {
     const int idx = first + i;
     if (idx >= total) break;

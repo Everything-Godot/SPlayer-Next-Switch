@@ -125,7 +125,7 @@ void drawLoginCard(App& a, Rect area) {
                        a.on->nickname().empty() ? "网易云用户" : a.on->nickname(),
                        th.text);
     c.drawText(*a.fTiny, card.x + 100, card.y + 62, "已连接网易云音乐", th.textDim);
-    c.drawText(*a.fTiny, card.x + 100, card.y + 88, "按 A 打开我的歌单", th.textFaint);
+    c.drawText(*a.fTiny, card.x + 100, card.y + 88, "按 A 读取云盘曲目", th.textFaint);
     return;
   }
 
@@ -193,7 +193,10 @@ void drawLoginCard(App& a, Rect area) {
 }
 
 // ---------------------------------------------------------------------------
-// Cloud: the account / playlist browser (desktop: /cloud)
+// Cloud drive (desktop: /cloud) — the user's *uploaded* songs.
+//
+// This page used to draw the playlist list, which is what made the sidebar read
+// as if playlists lived in the cloud drive. Playlists belong to 我的收藏.
 // ---------------------------------------------------------------------------
 void drawCloud(App& a, Rect body) {
   Canvas& c = *a.c;
@@ -201,7 +204,7 @@ void drawCloud(App& a, Rect body) {
   const int pad = uiContentPad();
 
   if (!a.on) {
-    ui::emptyState(a, body, icons::download, "在线功能未初始化", "");
+    ui::emptyState(a, body, icons::cloud, "在线功能未初始化", "");
     return;
   }
 
@@ -212,54 +215,156 @@ void drawCloud(App& a, Rect body) {
 
   int y = body.y + pad;
   const Rect head(body.x + pad, y, body.w - pad * 2, 34);
-  ui::sectionHeader(a, head.x, head.y, head.w, "我的歌单",
-                    a.on->busy() ? online::jobName(a.on->currentJob()) : "");
+  ui::sectionHeader(a, head.x, head.y, head.w, "云盘",
+                    a.on->busy() ? online::jobName(a.on->currentJob()) : "Y 刷新");
   y = head.bottom() + 10;
 
-  const auto& lists = a.on->playlists();
+  const auto& songs = a.on->cloudSongs();
   Rect content(body.x + pad, y, body.w - pad * 2, body.bottom() - y - pad);
 
-  if (lists.empty()) {
-    if (a.on->busy()) {
-      c.drawTextCentered(*a.fSmall, content, "正在读取歌单…", th.textDim);
+  if (songs.empty()) {
+    if (a.on->busy() && a.on->currentJob() == online::Job::CloudList) {
+      c.drawTextCentered(*a.fSmall, content, "正在读取云盘…", th.textDim);
     } else {
-      ui::emptyState(a, content, icons::queue, "还没有读取歌单",
-                     "按 A 登录并同步网易云歌单");
+      ui::emptyState(a, content, icons::cloud, "云盘是空的",
+                     "按 Y 读取，或先在手机端上传音乐");
     }
     return;
   }
 
-  constexpr int rowH = 64;
+  constexpr int rowH = kTrackRowH;
   const int visible = std::max(1, content.h / rowH);
-  a.cloudSel = std::clamp(a.cloudSel, 0, int(lists.size()) - 1);
+  a.cloudSel = std::clamp(a.cloudSel, 0, int(songs.size()) - 1);
 
-  int first = a.onlineScroll;
-  if (a.cloudSel < first) first = a.cloudSel;
-  if (a.cloudSel >= first + visible) first = a.cloudSel - visible + 1;
-  first = std::clamp(first, 0, std::max(0, int(lists.size()) - visible));
-  a.onlineScroll = first;
+  if (a.cloudSel < a.cloudScroll) a.cloudScroll = a.cloudSel;
+  if (a.cloudSel >= a.cloudScroll + visible) a.cloudScroll = a.cloudSel - visible + 1;
+  a.cloudScroll = std::clamp(a.cloudScroll, 0, std::max(0, int(songs.size()) - visible));
+
+  Rect panel = content;
+  c.fillRoundRect(panel, 14, th.surface);
+  c.pushClip(Rect(panel.x + 4, panel.y + 6, panel.w - 8, panel.h - 12));
+  ui::publishRows(a, Rect(panel.x + 6, panel.y + 6, panel.w - 12, rowH), rowH,
+                  panel.w - 12, int(songs.size()), a.cloudScroll, visible);
 
   for (int i = 0; i < visible; ++i) {
-    const int idx = first + i;
-    if (idx >= int(lists.size())) break;
-    const netease::PlaylistSummary& pl = lists[size_t(idx)];
-    Rect row(content.x, content.y + i * rowH, content.w, rowH - 8);
+    const int idx = a.cloudScroll + i;
+    if (idx >= int(songs.size())) break;
+    const netease::Song& s = songs[size_t(idx)];
+    Rect row(panel.x + 6, panel.y + 6 + i * rowH, panel.w - 12, rowH - 4);
+    const bool sel = idx == a.cloudSel;
+    if (sel) c.fillRoundRect(row, 10, th.surfaceAlt);
 
-    if (idx == a.cloudSel) {
-      c.fillRoundRect(row, 10, th.surfaceAlt);
-      c.fillRoundRect(Rect(row.x, row.y + 8, 3, row.h - 16), 2, th.accent);
+    if (idx == a.on->pendingSong()) {
+      const float p = a.on->downloadProgress();
+      char buf[16];
+      std::snprintf(buf, sizeof(buf), "%d%%", int(p * 100.f));
+      c.drawTextRight(*a.fTiny, Rect(row.x, row.y + (row.h - 16) / 2, 44, 16), buf,
+                      th.accent);
+    } else {
+      c.drawTextRight(*a.fTiny, Rect(row.x, row.y + (row.h - 16) / 2, 44, 16),
+                      std::to_string(idx + 1), sel ? th.accent : th.textFaint);
     }
-    Rect art(row.x + 10, row.y + 6, row.h - 12, row.h - 12);
-    c.fillRoundRect(art, 8, th.surfaceHi);
-    icons::queue(c, art.inset(9), idx == a.cloudSel ? th.accent : th.textFaint);
+
+    Rect art(row.x + 52, row.y + 7, row.h - 14, row.h - 14);
+    c.fillRoundRect(art, 7, th.surfaceHi);
+    icons::cloud(c, art.inset(8), sel ? th.accent : th.textFaint);
 
     c.drawTextEllipsis(*a.fSmall,
-                       Rect(art.right() + 14, row.y + 10, row.w - 200, 22),
-                       pl.name.empty() ? "未命名歌单" : pl.name, th.text);
-    char meta[64];
-    std::snprintf(meta, sizeof(meta), "%d 首", pl.trackCount);
-    c.drawText(*a.fTiny, art.right() + 14, row.y + 34, meta, th.textFaint);
+                       Rect(art.right() + 14, row.y + 8, row.w - 300, 22),
+                       s.name.empty() ? "未知曲目" : s.name, sel ? th.text : th.textDim);
+    c.drawTextEllipsis(*a.fTiny,
+                       Rect(art.right() + 14, row.y + 30, row.w - 300, 18),
+                       s.artist.empty() ? std::string("未知艺术家") : s.artist,
+                       th.textFaint);
+    c.drawTextRight(*a.fTiny, Rect(row.right() - 84, row.y + (row.h - 18) / 2, 70, 18),
+                    formatTime(uint64_t(s.durationMs)), th.textFaint);
   }
+  c.popClip();
+}
+
+void drawPlaylistPage(App& a, Rect body) {
+  Canvas& c = *a.c;
+  const Theme& th = *a.th;
+  const int pad = uiContentPad();
+
+  if (!a.on) {
+    ui::emptyState(a, body, icons::queue, "在线功能未初始化", "");
+    return;
+  }
+
+  int y = body.y + pad;
+  const Rect head(body.x + pad, y, body.w - pad * 2, 34);
+  const std::string name =
+      a.on->playlistName().empty() ? "歌单" : a.on->playlistName();
+  ui::sectionHeader(a, head.x, head.y, head.w, name,
+                    a.on->busy() ? online::jobName(a.on->currentJob()) : "B 返回");
+  y = head.bottom() + 10;
+
+  const auto& songs = a.on->playlistSongs();
+  Rect content(body.x + pad, y, body.w - pad * 2, body.bottom() - y - pad);
+
+  if (songs.empty()) {
+    if (a.on->busy()) {
+      c.drawTextCentered(*a.fSmall, content, "正在读取歌单…", th.textDim);
+    } else {
+      ui::emptyState(a, content, icons::queue, "这个歌单是空的",
+                     a.on->error().empty() ? std::string()
+                                           : a.on->error());
+    }
+    return;
+  }
+
+  constexpr int rowH = kTrackRowH;
+  const int visible = std::max(1, content.h / rowH);
+  a.playlistSel = std::clamp(a.playlistSel, 0, int(songs.size()) - 1);
+
+  if (a.playlistSel < a.playlistScroll) a.playlistScroll = a.playlistSel;
+  if (a.playlistSel >= a.playlistScroll + visible)
+    a.playlistScroll = a.playlistSel - visible + 1;
+  a.playlistScroll =
+      std::clamp(a.playlistScroll, 0, std::max(0, int(songs.size()) - visible));
+
+  Rect panel = content;
+  c.fillRoundRect(panel, 14, th.surface);
+  c.pushClip(Rect(panel.x + 4, panel.y + 6, panel.w - 8, panel.h - 12));
+  ui::publishRows(a, Rect(panel.x + 6, panel.y + 6, panel.w - 12, rowH), rowH,
+                  panel.w - 12, int(songs.size()), a.playlistScroll, visible);
+
+  for (int i = 0; i < visible; ++i) {
+    const int idx = a.playlistScroll + i;
+    if (idx >= int(songs.size())) break;
+    const netease::Song& s = songs[size_t(idx)];
+    Rect row(panel.x + 6, panel.y + 6 + i * rowH, panel.w - 12, rowH - 4);
+    const bool sel = idx == a.playlistSel;
+    if (sel) c.fillRoundRect(row, 10, th.surfaceAlt);
+
+    if (idx == a.on->pendingSong()) {
+      const float p = a.on->downloadProgress();
+      char buf[16];
+      std::snprintf(buf, sizeof(buf), "%d%%", int(p * 100.f));
+      c.drawTextRight(*a.fTiny, Rect(row.x, row.y + (row.h - 16) / 2, 44, 16), buf,
+                      th.accent);
+    } else {
+      c.drawTextRight(*a.fTiny, Rect(row.x, row.y + (row.h - 16) / 2, 44, 16),
+                      std::to_string(idx + 1), sel ? th.accent : th.textFaint);
+    }
+
+    Rect art(row.x + 52, row.y + 7, row.h - 14, row.h - 14);
+    c.fillRoundRect(art, 7, th.surfaceHi);
+    icons::note(c, art.inset(8), sel ? th.accent : th.textFaint);
+
+    c.drawTextEllipsis(*a.fSmall,
+                       Rect(art.right() + 14, row.y + 8, row.w - 300, 22),
+                       s.name.empty() ? "未知曲目" : s.name, sel ? th.text : th.textDim);
+    c.drawTextEllipsis(*a.fTiny,
+                       Rect(art.right() + 14, row.y + 30, row.w - 300, 18),
+                       (s.artist.empty() ? std::string("未知艺术家") : s.artist) +
+                           (s.album.empty() ? std::string() : " · " + s.album),
+                       th.textFaint);
+    c.drawTextRight(*a.fTiny, Rect(row.right() - 84, row.y + (row.h - 18) / 2, 70, 18),
+                    formatTime(uint64_t(s.durationMs)), th.textFaint);
+  }
+  c.popClip();
 }
 
 // ---------------------------------------------------------------------------
@@ -309,7 +414,7 @@ void drawStreaming(App& a, Rect body) {
                          th.textDim);
     } else {
       ui::emptyState(a, content, icons::search, "还没有搜索结果",
-                     "按 Plus 输入关键字，或到云盘页打开歌单");
+                     "按 Plus 输入关键字搜索网易云音乐");
     }
     return;
   }
@@ -327,6 +432,8 @@ void drawStreaming(App& a, Rect body) {
   Rect panel = content;
   c.fillRoundRect(panel, 14, th.surface);
   c.pushClip(Rect(panel.x + 4, panel.y + 6, panel.w - 8, panel.h - 12));
+  ui::publishRows(a, Rect(panel.x + 6, panel.y + 6, panel.w - 12, rowH), rowH,
+                  panel.w - 12, int(songs.size()), first, visible);
 
   for (int i = 0; i < visible; ++i) {
     const int idx = first + i;
