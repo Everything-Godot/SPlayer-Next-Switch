@@ -57,6 +57,42 @@ bool decodeChunked(const std::string& in, std::string& out, size_t maxBytes) {
   return true;
 }
 
+// --- signal-safe socket wrappers -------------------------------------------
+// A blocking connect()/send()/recv() returns EINTR whenever a signal lands on
+// the thread. That happens in practice (SIGCHLD from system()/fork, alarm
+// timers, the Switch's own late-initialised services), and treating it as a
+// hard failure made downloads die with "Interrupted system call" before the
+// first byte. Every socket call therefore retries on EINTR instead of bailing.
+
+int connectRetry(int fd, const sockaddr* addr, socklen_t len) {
+  for (;;) {
+    if (::connect(fd, addr, len) == 0) return 0;
+    if (errno != EINTR) return -1;
+  }
+}
+
+ssize_t sendRetry(int fd, const char* data, size_t n) {
+  for (;;) {
+    // MSG_NOSIGNAL keeps a dropped CDN connection from raising SIGPIPE and
+    // killing the whole app; not every libc defines it, so fall back to 0.
+#ifdef MSG_NOSIGNAL
+    const ssize_t r = ::send(fd, data, n, MSG_NOSIGNAL);
+#else
+    const ssize_t r = ::send(fd, data, n, 0);
+#endif
+    if (r < 0 && errno == EINTR) continue;
+    return r;
+  }
+}
+
+ssize_t recvRetry(int fd, char* buf, size_t n) {
+  for (;;) {
+    const ssize_t r = ::recv(fd, buf, n, 0);
+    if (r < 0 && errno == EINTR) continue;
+    return r;
+  }
+}
+
 }  // namespace
 
 std::string Response::header(const std::string& name) const {
@@ -125,7 +161,7 @@ Response request(const Request& req) {
   ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
   ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
-  if (::connect(fd, ai->ai_addr, ai->ai_addrlen) != 0) {
+  if (connectRetry(fd, ai->ai_addr, ai->ai_addrlen) != 0) {
     res.error = std::string("connect failed: ") + std::strerror(errno);
     ::close(fd);
     ::freeaddrinfo(ai);
@@ -162,7 +198,7 @@ Response request(const Request& req) {
 
   size_t sent = 0;
   while (sent < out.size()) {
-    const ssize_t n = ::send(fd, out.data() + sent, out.size() - sent, 0);
+    const ssize_t n = sendRetry(fd, out.data() + sent, out.size() - sent);
     if (n <= 0) {
       res.error = std::string("send failed: ") + std::strerror(errno);
       ::close(fd);
@@ -175,7 +211,7 @@ Response request(const Request& req) {
   std::string raw;
   char buf[8192];
   for (;;) {
-    const ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+    const ssize_t n = recvRetry(fd, buf, sizeof(buf));
     if (n > 0) {
       raw.append(buf, size_t(n));
       // Stop early when only a prefix was requested (audio probing).
@@ -268,6 +304,171 @@ Response get(const std::string& url,
   r.headers = headers;
   if (!rangeHeader.empty()) r.headers.emplace_back("Range", rangeHeader);
   return request(r);
+}
+
+int downloadToStream(const std::string& url,
+                     void* fileHandle,
+                     const std::vector<std::pair<std::string, std::string>>& headers,
+                     int timeoutMs,
+                     size_t (*writeFn)(void* handle, const void* data, size_t n),
+                     void (*onProgress)(void* user, size_t bytes),
+                     void* user,
+                     std::string& err) {
+  std::string host;
+  uint16_t port = 80;
+  std::string path;
+  if (!parseUrl(url, host, port, path)) {
+    err = "unsupported url: " + url.substr(0, 60);
+    return 0;
+  }
+
+  addrinfo hints{};
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  addrinfo* ai = nullptr;
+  char portStr[8];
+  std::snprintf(portStr, sizeof(portStr), "%u", unsigned(port));
+  if (::getaddrinfo(host.c_str(), portStr, &hints, &ai) != 0 || !ai) {
+    err = "dns failed for " + host;
+    return 0;
+  }
+
+  const int fd = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+  if (fd < 0) {
+    ::freeaddrinfo(ai);
+    err = "socket() failed";
+    return 0;
+  }
+
+  timeval tv{};
+  tv.tv_sec = timeoutMs / 1000;
+  tv.tv_usec = (timeoutMs % 1000) * 1000;
+  ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+  if (connectRetry(fd, ai->ai_addr, ai->ai_addrlen) != 0) {
+    err = std::string("connect failed: ") + std::strerror(errno);
+    ::close(fd);
+    ::freeaddrinfo(ai);
+    return 0;
+  }
+  ::freeaddrinfo(ai);
+
+  std::string out;
+  out += "GET ";
+  out += path;
+  out += " HTTP/1.1\r\nHost: ";
+  out += host;
+  if (port != 80) {
+    out.push_back(':');
+    out += std::to_string(port);
+  }
+  out += "\r\nConnection: close\r\n";
+  for (const auto& kv : headers) {
+    out += kv.first;
+    out += ": ";
+    out += kv.second;
+    out += "\r\n";
+  }
+  out += "\r\n";
+
+  size_t sent = 0;
+  while (sent < out.size()) {
+    const ssize_t n = sendRetry(fd, out.data() + sent, out.size() - sent);
+    if (n <= 0) {
+      err = std::string("send failed: ") + std::strerror(errno);
+      ::close(fd);
+      return 0;
+    }
+    sent += size_t(n);
+  }
+
+  // Read the header first, then stream the body straight into the file so a
+  // 10 MB track never has to be held in memory.
+  std::string head;
+  char buf[16384];
+  size_t bodyStart = std::string::npos;
+  while (bodyStart == std::string::npos) {
+    const ssize_t n = recvRetry(fd, buf, sizeof(buf));
+    if (n <= 0) {
+      ::close(fd);
+      err = "connection closed before headers completed";
+      return 0;
+    }
+    head.append(buf, size_t(n));
+    bodyStart = head.find("\r\n\r\n");
+  }
+
+  const std::string headOnly = head.substr(0, bodyStart);
+  size_t lineEnd = headOnly.find("\r\n");
+  const std::string statusLine =
+      headOnly.substr(0, lineEnd == std::string::npos ? headOnly.size() : lineEnd);
+  int status = 0;
+  const size_t sp = statusLine.find(' ');
+  if (sp != std::string::npos) status = std::atoi(statusLine.c_str() + sp + 1);
+
+  // Expected length drives the progress bar; 0 means unknown (chunked).
+  size_t expected = 0;
+  size_t pos = (lineEnd == std::string::npos) ? headOnly.size() : lineEnd + 2;
+  while (pos < headOnly.size()) {
+    const size_t eol = headOnly.find("\r\n", pos);
+    const std::string line = headOnly.substr(
+        pos, (eol == std::string::npos ? headOnly.size() : eol) - pos);
+    const size_t colon = line.find(':');
+    if (colon != std::string::npos) {
+      const std::string key = toLower(trim(line.substr(0, colon)));
+      if (key == "content-length") {
+        expected = size_t(std::strtoul(trim(line.substr(colon + 1)).c_str(), nullptr, 10));
+      }
+    }
+    if (eol == std::string::npos) break;
+    pos = eol + 2;
+  }
+
+  if (status != 200) {
+    ::close(fd);
+    err = "http status " + std::to_string(status);
+    return status;
+  }
+
+  size_t written = 0;
+  auto flush = [&](const char* data, size_t n) -> bool {
+    if (n == 0) return true;
+    const size_t w = writeFn ? writeFn(fileHandle, data, n) : n;
+    if (w != n) return false;
+    written += n;
+    if (onProgress) onProgress(user, written);
+    return true;
+  };
+
+  // Bytes that arrived together with the header.
+  const size_t firstChunk = head.size() - (bodyStart + 4);
+  if (firstChunk && !flush(head.data() + bodyStart + 4, firstChunk)) {
+    ::close(fd);
+    err = "write failed";
+    return 0;
+  }
+
+  for (;;) {
+    const ssize_t n = recvRetry(fd, buf, sizeof(buf));
+    if (n > 0) {
+      if (!flush(buf, size_t(n))) {
+        ::close(fd);
+        err = "write failed";
+        return 0;
+      }
+      continue;
+    }
+    break;
+  }
+  ::close(fd);
+
+  if (expected && written != expected) {
+    err = "truncated: got " + std::to_string(written) + " of " +
+          std::to_string(expected);
+    return 0;
+  }
+  return status;
 }
 
 }  // namespace spn::http

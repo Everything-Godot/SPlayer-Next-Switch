@@ -451,12 +451,19 @@ int main(int argc, char** argv) {
   // the framebuffer takes over the display.
   consoleInit(nullptr);
   printf("SPlayer-Next (nx)\n");
-
   if (R_FAILED(romfsInit())) {
     printf("romfsInit failed\n");
     consoleExit(nullptr);
     return 1;
   }
+
+  // Networking for the online (NetEase) side. Failure is non-fatal: the local
+  // player must still work on a console with no network configured.
+  const bool netOk = R_SUCCEEDED(socketInitializeDefault());
+  if (!netOk) {
+    printf("socketInitializeDefault failed (online features disabled)\n");
+  }
+
 
   Font fTiny, fSmall, fBody, fTitle, fHuge;
   const char* fontPath = "romfs:/fonts/wqy-microhei.ttc";
@@ -581,6 +588,7 @@ int main(int argc, char** argv) {
   g.store.save();
   g.audio.shutdown();
   fbuf.release();
+  if (netOk) socketExit();
   romfsExit();
   return 0;
 }

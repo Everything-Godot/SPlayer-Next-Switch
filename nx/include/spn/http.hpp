@@ -56,4 +56,17 @@ Response get(const std::string& url,
 // that is not plain http (https is deliberately unsupported: we never need it).
 bool parseUrl(const std::string& url, std::string& host, uint16_t& port, std::string& path);
 
+// Streaming download: GETs `url` and appends body bytes to `out` (an open
+// FILE*), reporting progress via `onBytes(totalSoFar)`. Returns the HTTP status
+// (0 on transport failure). Used by the track cache so a 10 MB file never has to
+// sit in RAM.
+int downloadToStream(const std::string& url,
+                     void* fileHandle,
+                     const std::vector<std::pair<std::string, std::string>>& headers,
+                     int timeoutMs,
+                     size_t (*writeFn)(void* handle, const void* data, size_t n),
+                     void (*onProgress)(void* user, size_t bytes),
+                     void* user,
+                     std::string& err);
+
 }  // namespace spn::http
