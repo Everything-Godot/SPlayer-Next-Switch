@@ -426,15 +426,18 @@ void handleInput(u64 kDown, PadState& pad) {
 // Framebuffer helpers
 // ---------------------------------------------------------------------------
 
-struct Framebuffer {
-  Framebuffer() = default;
-  ~Framebuffer() { release(); }
+// NOTE: libnx already declares a `Framebuffer` typedef, so this wrapper must
+// not reuse that name.
+struct Screen {
+  Screen() = default;
+  ~Screen() { release(); }
 
   bool init() {
     if (R_FAILED(framebufferCreate(&fb_, nwindowGetDefault(), 1280, 720,
                                    PIXEL_FORMAT_RGBA_8888, 2))) {
       return false;
     }
+    created_ = true;
     return true;
   }
 
@@ -446,14 +449,16 @@ struct Framebuffer {
   void end() { framebufferEnd(&fb_); }
 
   void release() {
-    if (fb_.framebuffer) {
+    if (created_) {
       framebufferClose(&fb_);
-      fb_ = Framebuffer_t{};
+      fb_ = ::Framebuffer{};
+      created_ = false;
     }
   }
 
-  Framebuffer_t fb_{};
+  ::Framebuffer fb_{};
   u32 stride_ = 0;
+  bool created_ = false;
 };
 
 }  // namespace
@@ -505,7 +510,7 @@ int main(int argc, char** argv) {
 
   consoleExit(nullptr);
 
-  Framebuffer fbuf;
+  Screen fbuf;
   if (!fbuf.init()) {
     g.audio.shutdown();
     romfsExit();

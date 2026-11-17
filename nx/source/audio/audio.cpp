@@ -414,9 +414,23 @@ void AudioEngine::threadMain() {
     if (releasedCount == 0) continue;
 
     for (u32 n = 0; n < releasedCount; ++n) {
-      int16_t* dst = buffers[cursor].data();
-      AudioOutBuffer* submit = &outBufs[cursor];
-      cursor = (cursor + 1) % kBufferCount;
+      // Map the released AudioOutBuffer back to its backing store by address.
+      AudioOutBuffer* submit = released ? &released[n] : &outBufs[cursor];
+      int bufIndex = -1;
+      for (int i = 0; i < kBufferCount; ++i) {
+        if (submit == &outBufs[i]) {
+          bufIndex = i;
+          break;
+        }
+      }
+      if (bufIndex < 0) {
+        // Defensive fallback: reuse the rolling cursor.
+        bufIndex = cursor;
+        cursor = (cursor + 1) % kBufferCount;
+        submit = &outBufs[bufIndex];
+      }
+
+      int16_t* dst = buffers[bufIndex].data();
 
       const bool active =
           playing_.load() && !paused_.load() && decoder.isOpen() && !trackEnded;
