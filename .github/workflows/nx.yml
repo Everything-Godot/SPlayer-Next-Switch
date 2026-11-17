@@ -59,6 +59,8 @@ jobs:
         working-directory: nx
         shell: bash
         run: |
+          echo "--- elf2nro usage ---"
+          "$DEVKITPRO/tools/bin/elf2nro" 2>&1 | head -n 15 || true
           echo "--- romfs tree ---"
           find romfs -type f -exec ls -l {} \;
           echo "--- build ---"

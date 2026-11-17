@@ -91,7 +91,7 @@ $(BUILD)/$(TARGET).nacp:
 	$(TOOLS)/nacptool --create "$(APP_TITLE)" "$(APP_AUTHOR)" "$(APP_VERSION)" $@
 
 $(BUILD)/$(TARGET).nro: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).nacp
-	$(TOOLS)/elf2nro $< $@ --nacp=$(BUILD)/$(TARGET).nacp --romfs=$(ROMFS)
+	$(TOOLS)/elf2nro $< $@ --nacp=$(BUILD)/$(TARGET).nacp --romfsdir=$(ROMFS)
 	@echo "built: $@"
 
 nro: $(BUILD)/$(TARGET).nro
