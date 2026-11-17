@@ -428,6 +428,10 @@ void handleInput(u64 kDown, PadState& pad) {
 
 // NOTE: libnx already declares a `Framebuffer` typedef, so this wrapper must
 // not reuse that name.
+//
+// The Tegra framebuffer is block-linear by default; framebufferMakeLinear()
+// installs a shadow buffer in plain row-major order which framebufferBegin()
+// then hands back. That is what lets us treat it as a simple u32 canvas.
 struct Screen {
   Screen() = default;
   ~Screen() { release(); }
@@ -437,13 +441,17 @@ struct Screen {
                                    PIXEL_FORMAT_RGBA_8888, 2))) {
       return false;
     }
+    if (R_FAILED(framebufferMakeLinear(&fb_))) {
+      framebufferClose(&fb_);
+      return false;
+    }
     created_ = true;
     return true;
   }
 
   uint32_t* begin() {
-    if (R_FAILED(framebufferBegin(&fb_, &stride_))) return nullptr;
-    return reinterpret_cast<uint32_t*>(fb_.framebuffer);
+    void* buf = framebufferBegin(&fb_, &stride_);
+    return reinterpret_cast<uint32_t*>(buf);
   }
 
   void end() { framebufferEnd(&fb_); }
