@@ -43,7 +43,9 @@ class Library {
 
   CoverCache& covers() { return covers_; }
 
-  // Locates the sidecar lyric next to a track. Supports .lrc / .LRC / .ttml / .ass.
+  // Locates the best sidecar lyric next to a track. Probes the eight known
+  // extensions in the desktop app's format priority order
+  // (ttml > lys > qrc > krc > yrc > lrc > ass > srt), case-insensitively.
   static std::string findLyricFile(const std::string& trackPath);
 
   static bool isSupportedExtension(const std::string& path);

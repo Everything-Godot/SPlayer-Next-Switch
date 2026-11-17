@@ -12,6 +12,49 @@ namespace spn {
 namespace {
 
 // Draws the right-hand lyric column, keeping the active line centred.
+// Word-timed lyrics (TTML / QRC / KRC / YRC / LYS / enhanced LRC / ASS karaoke)
+// get a karaoke sweep: the already-sung prefix is drawn in the accent colour.
+// `posMs` is the playback position; line-timed-only lines fall back to a plain
+// centred draw in `base`.
+void drawLyricLine(Canvas& c, const Font& f, Rect box, const LyricLine& line,
+                   Color base, Color sung, uint64_t posMs) {
+  if (!line.wordTimed()) {
+    c.drawTextEllipsisCentered(f, box, line.text, base);
+    return;
+  }
+
+  const int fullW = c.measureText(f, line.text);
+  if (fullW <= 0) return;
+  if (fullW > box.w) {
+    // Too long for the column: don't attempt a sweep.
+    c.drawTextEllipsisCentered(f, box, line.text, base);
+    return;
+  }
+  const int x = box.x + (box.w - fullW) / 2;
+  const int y = box.y + (box.h - f.lineHeight()) / 2;
+
+  // Sum the widths of the syllables that have already been sung.
+  float sungW = 0.0f;
+  for (const LyricWord& w : line.words) {
+    if (w.endMs > w.startMs && posMs >= w.endMs) {
+      sungW += float(c.measureText(f, w.text));
+      continue;
+    }
+    if (w.endMs > w.startMs && posMs > w.startMs) {
+      const float t = float(posMs - w.startMs) / float(w.endMs - w.startMs);
+      sungW += float(c.measureText(f, w.text)) * std::min(1.0f, std::max(0.0f, t));
+    }
+    break;
+  }
+
+  c.drawText(f, x, y, line.text, base);
+  const int sweepPx = int(sungW);
+  if (sweepPx <= 0) return;
+  c.pushClip(Rect(x, box.y, std::min(sweepPx, fullW), box.h));
+  c.drawText(f, x, y, line.text, sung);
+  c.popClip();
+}
+
 void drawLyrics(App& a, Rect area, const Track& t) {
   Canvas& c = *a.c;
   const Theme& th = *a.th;
@@ -20,7 +63,7 @@ void drawLyrics(App& a, Rect area, const Track& t) {
     c.drawTextCentered(*a.fSmall, Rect(area.x, area.y + area.h / 2 - 20, area.w, 24),
                        "没有歌词文件", th.textFaint);
     c.drawTextCentered(*a.fTiny, Rect(area.x, area.y + area.h / 2 + 6, area.w, 20),
-                       "在同一目录放一个同名 .lrc 即可", th.textFaint);
+                       "同目录放同名 .ttml/.lys/.qrc/.krc/.yrc/.lrc/.ass/.srt", th.textFaint);
     return;
   }
 
@@ -66,8 +109,10 @@ void drawLyrics(App& a, Rect area, const Track& t) {
       // Highlight plate behind the active line.
       c.fillRoundRect(Rect(box.x, box.y + 2, box.w, lineH - 4), 10,
                       th.surfaceAlt);
+      drawLyricLine(c, f, box, lines[size_t(i)], col, th.accent, posMs);
+    } else {
+      c.drawTextEllipsisCentered(f, box, lines[size_t(i)].text, col);
     }
-    c.drawTextEllipsisCentered(f, box, lines[size_t(i)].text, col);
   }
   c.popClip();
 }

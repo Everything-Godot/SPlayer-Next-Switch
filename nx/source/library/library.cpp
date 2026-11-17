@@ -30,6 +30,11 @@ std::string toLower(std::string s) {
   return s;
 }
 
+std::string toUpper(std::string s) {
+  for (char& c : s) c = char(std::toupper(static_cast<unsigned char>(c)));
+  return s;
+}
+
 std::string baseNameNoExt(const std::string& path) {
   const size_t slash = path.find_last_of('/');
   std::string name = slash == std::string::npos ? path : path.substr(slash + 1);
@@ -91,11 +96,21 @@ std::string Library::findLyricFile(const std::string& trackPath) {
   if (dot == std::string::npos) return {};
   const std::string stem = trackPath.substr(0, dot);
 
-  static const char* kExts[] = {".lrc", ".LRC", ".ttml", ".TTML", ".ass", ".ASS"};
+  // Priority mirrors DEFAULT_LYRIC_FORMAT_ORDER from the desktop app.
+  static const char* kExts[] = {"ttml", "lys", "qrc", "krc",
+                                "yrc",  "lrc", "ass", "srt"};
   struct stat st {};
   for (const char* ext : kExts) {
-    const std::string candidate = stem + ext;
-    if (stat(candidate.c_str(), &st) == 0) return candidate;
+    const std::string lower = std::string(".") + ext;
+    const std::string upper = std::string(".") + toUpper(ext);
+    for (const std::string& candidate : {stem + lower, stem + upper}) {
+      if (stat(candidate.c_str(), &st) == 0) return candidate;
+    }
+    // Mixed-case extensions (.Ttml / .Lrc) show up in the wild.
+    std::string mixed = std::string(".") + char(std::toupper(ext[0]));
+    mixed += ext + 1;
+    const std::string mixedCandidate = stem + mixed;
+    if (stat(mixedCandidate.c_str(), &st) == 0) return mixedCandidate;
   }
   return {};
 }

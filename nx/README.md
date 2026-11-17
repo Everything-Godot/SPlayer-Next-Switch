@@ -15,7 +15,7 @@ rewrite** that reproduces the desktop app's page structure and look:
 | Audio     | `audio-engine` (Rust/FFmpeg) | dr_libs (MP3/FLAC/WAV/OGG) + audout  |
 | Metadata  | node `music-metadata`        | in-tree ID3v2 / FLAC / RIFF reader   |
 | Covers    | Chromium image pipeline      | stb_image + bounded LRU cover cache  |
-| Lyrics    | `lyric-kit` (LRC/QRC/YRC…)   | LRC parser + centred lyric scroll    |
+| Lyrics    | `lyric-kit` (LRC/QRC/YRC…)   | in-tree 8-format parser + karaoke    |
 | State     | Electron store (JSON)        | plain-text store on the SD card      |
 
 ## Pages
@@ -49,7 +49,9 @@ All eleven pages mirror the desktop sidebar / router:
 - Likes, play history, playlists and settings persisted to
   `sdmc:/switch/SPlayer-Next/state/`
 - Three themes (暮色 / 午夜 / 极光) switched live from the settings page
-- LRC lyrics with smooth centred highlighting
+- **Lyrics in all eight desktop formats** (TTML / LYS / QRC / KRC / YRC / LRC /
+  ASS / SRT) with smooth centred scrolling, and a karaoke sweep on word-timed
+  lines
 - Play / pause / next / prev, ±10 s seek, shuffle, three repeat modes,
   live volume from the stick, and a transient status toast
 
@@ -60,7 +62,10 @@ All eleven pages mirror the desktop sidebar / router:
    - `sdmc:/switch/SPlayer-Next/music/`
    - `sdmc:/SPlayer-Next/music/`
    - `sdmc:/music/`
-3. (Optional) drop a sidecar `.lrc` next to each track, same basename.
+3. (Optional) drop a sidecar lyric next to each track, same basename — `.ttml`,
+   `.lys`, `.qrc`, `.krc`, `.yrc`, `.lrc`, `.ass` or `.srt`. If several exist the
+   desktop app's priority order is used (`ttml > lys > qrc > krc > yrc > lrc >
+   ass > srt`).
 4. Launch via the homebrew menu.
 
 State files are created next to the NRO under `sdmc:/switch/SPlayer-Next/state/`.
@@ -142,7 +147,7 @@ nx/
 │   ├── library.hpp          # recursive scanner + aggregates
 │   ├── store.hpp            # likes / history / playlists / settings
 │   ├── audio.hpp            # dr_libs decoder + audout streaming
-│   ├── lyrics.hpp           # LRC parser
+│   ├── lyrics.hpp           # 8-format lyric parser (TTML/LYS/QRC/KRC/YRC/LRC/ASS/SRT)
 │   ├── icons.hpp            # hand-rasterised vector icons
 │   ├── widgets.hpp          # shared widgets (rows, tiles, pills)
 │   └── ui.hpp               # pages, theme, App state
@@ -159,7 +164,7 @@ nx/
 │   │   └── page_*.cpp       # one file per page group
 │   ├── library/             # library.cpp, tag.cpp, store.cpp
 │   ├── audio/               # audio.cpp, drlibs_impl.cpp
-│   ├── lyrics/              # lyrics.cpp
+│   ├── lyrics/              # lyrics.cpp (one parser per format + sniffing)
 │   └── host_preview.cpp     # headless renderer (excluded from the NRO)
 ├── external/                # vendored single-header libs
 └── romfs/fonts/             # embedded CJK font
@@ -167,8 +172,17 @@ nx/
 
 ## Status / limitations
 
-- Lyrics: LRC only (the desktop app also speaks QRC / YRC / TTML / LYS / KRC).
-  The library will find `.ttml` / `.ass` sidecars, but only LRC is parsed.
+- Lyrics are parsed natively for all eight desktop formats and are picked by the
+  desktop priority order. Remaining gaps, all deliberate:
+  - **Encrypted payloads are rejected**, not faked: real `.krc` files (XOR-scramed
+    after the `krc1` magic) and encrypted `.qrc` bodies parse to nothing. Only
+    plain-text QRC/KRC parse.
+  - Credit-header stripping (`stripLyricMetadata`, 词：/曲：/编曲： and
+    "song - artist" first lines) is not implemented; those lines show up as-is.
+  - Translations/romanisations are dropped rather than merged: TTML
+    `ttm:role="translation|roman"` spans and ASS `TS`/`roma` styles are skipped.
+  - The karaoke sweep follows syllable timings; `\k`-less ASS and SRT lines are
+    line-timed only and just get the plain highlight.
 - Streaming servers (Subsonic / Navidrome / Jellyfin / Emby) are not
   implemented — this port is local-library first.
 - Playlists can be read and played, but new ones must be created elsewhere.
