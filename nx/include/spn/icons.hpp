@@ -39,6 +39,11 @@ void check(Canvas& c, Rect r, Color col);
 void trash(Canvas& c, Rect r, Color col);
 void back(Canvas& c, Rect r, Color col);
 void queue(Canvas& c, Rect r, Color col);
+// Added for the desktop-parity sidebar: /artists uses a person glyph, /cloud a
+// cloud outline, /streaming a "live" broadcast glyph.
+void person(Canvas& c, Rect r, Color col);
+void cloud(Canvas& c, Rect r, Color col);
+void broadcast(Canvas& c, Rect r, Color col);
 
 }  // namespace icons
 }  // namespace spn

@@ -179,6 +179,8 @@ bool Store::load() {
       else if (k == "theme") settings_.themeIndex = std::atoi(v.c_str());
       else if (k == "showLyrics") settings_.showLyrics = (v == "1");
       else if (k == "lyricFontSize") settings_.lyricFontSize = std::atoi(v.c_str());
+      else if (k == "downloadEnabled") settings_.downloadEnabled = (v == "1");
+      else if (k == "streamingEnabled") settings_.streamingEnabled = (v == "1");
       else if (k == "lastTrack") lastTrack_ = unescapeField(v);
       else if (k == "listeningSec") {
         listeningSec_ = uint64_t(std::strtoull(v.c_str(), nullptr, 10));
@@ -201,6 +203,10 @@ bool Store::saveSettings() const {
   lines.push_back(std::string("showLyrics=") +
                   (settings_.showLyrics ? "1" : "0"));
   lines.push_back("lyricFontSize=" + std::to_string(settings_.lyricFontSize));
+  lines.push_back(std::string("downloadEnabled=") +
+                  (settings_.downloadEnabled ? "1" : "0"));
+  lines.push_back(std::string("streamingEnabled=") +
+                  (settings_.streamingEnabled ? "1" : "0"));
   lines.push_back("lastTrack=" + escapeField(lastTrack_));
   lines.push_back("listeningSec=" + std::to_string(listeningSec_));
   return writeLines(kSettingsFile, lines);

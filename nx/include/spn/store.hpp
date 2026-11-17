@@ -35,6 +35,11 @@ struct Settings {
   int themeIndex = 0;      // 0 dark, 1 midnight, 2 aurora
   bool showLyrics = true;
   int lyricFontSize = 22;
+  // Feature gates mirroring the desktop SystemConfig flags that hide the
+  // /download and /streaming sidebar entries. On by default because the port
+  // ships them enabled.
+  bool downloadEnabled = true;
+  bool streamingEnabled = true;
 };
 
 class Store {

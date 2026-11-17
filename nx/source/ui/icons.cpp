@@ -391,5 +391,37 @@ void queue(Canvas& c, Rect r, Color col) {
   thickLine(c, b.px(0.86f), b.py(0.30f), b.px(0.86f), b.py(0.70f), th, col);
 }
 
+// /artists: a head and shoulders, the lucide "user" shape.
+void person(Canvas& c, Rect r, Color col) {
+  const Box b(r);
+  const float th = b.len(0.10f);
+  // Head: a hollow circle approximated by two arcs.
+  const float hx = b.px(0.50f), hy = b.py(0.34f), hr = b.len(0.17f);
+  arc(c, hx, hy, hr, 0.f, 360.f, th, col);
+  // Shoulders: a shallow arc from left hip to right hip.
+  arc(c, hx, b.py(0.94f), b.len(0.31f), 200.f, 340.f, th, col);
+}
+
+// /cloud: three overlapping circles plus a baseline, i.e. the lucide "cloud".
+void cloud(Canvas& c, Rect r, Color col) {
+  const Box b(r);
+  const float th = b.len(0.09f);
+  arc(c, b.px(0.36f), b.py(0.55f), b.len(0.19f), 140.f, 360.f, th, col);
+  arc(c, b.px(0.58f), b.py(0.46f), b.len(0.24f), 180.f, 380.f, th, col);
+  thickLine(c, b.px(0.24f), b.py(0.68f), b.px(0.76f), b.py(0.68f), th, col);
+  arc(c, b.px(0.70f), b.py(0.55f), b.len(0.14f), 270.f, 360.f, th, col);
+}
+
+// /streaming: a dot with two broadcast arcs, i.e. lucide "library"/"radio".
+void broadcast(Canvas& c, Rect r, Color col) {
+  const Box b(r);
+  const float th = b.len(0.08f);
+  c.fillCircle(int(b.px(0.50f)), int(b.py(0.52f)), int(b.len(0.09f)), col);
+  arc(c, b.px(0.50f), b.py(0.52f), b.len(0.24f), 200.f, 340.f, th, col);
+  arc(c, b.px(0.50f), b.py(0.52f), b.len(0.24f), 20.f, 160.f, th, col);
+  arc(c, b.px(0.50f), b.py(0.52f), b.len(0.38f), 205.f, 335.f, th, col);
+  arc(c, b.px(0.50f), b.py(0.52f), b.len(0.38f), 25.f, 155.f, th, col);
+}
+
 }  // namespace icons
 }  // namespace spn

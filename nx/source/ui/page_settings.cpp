@@ -4,6 +4,7 @@
 #include <cstdio>
 
 #include "spn/icons.hpp"
+#include "spn/online_service.hpp"
 #include "spn/ui.hpp"
 #include "spn/widgets.hpp"
 
@@ -20,7 +21,7 @@ struct Row {
   const char* hint;
 };
 
-int rowCount() { return 12; }
+int rowCount() { return 15; }
 
 Row rowAt(App& a, int index) {
   const Settings& s = a.store.settings();
@@ -36,13 +37,32 @@ Row rowAt(App& a, int index) {
     }
     case 5: return {RowKind::Slider, "音量", std::to_string(int(s.volume * 100)) + " %",
                     "也会同步到摇杆调节"};
-    case 6: return {RowKind::Action, "重新扫描曲库", "", "ZR"};
-    case 7: return {RowKind::Action, "清空播放历史", "", "不可撤销"};
-    case 8: return {RowKind::Info, "音乐目录",
-                    a.library.root().empty() ? "未找到" : a.library.root(), ""};
-    case 9: return {RowKind::Info, "曲目数量",
-                    std::to_string(a.library.tracks().size()) + " 首", ""};
-    case 10: return {RowKind::Info, "封面缓存",
+    case 6: return {RowKind::Toggle, "下载入口", s.downloadEnabled ? "开" : "关",
+                    "对应桌面版的 download 功能开关"};
+    case 7: return {RowKind::Toggle, "流媒体入口", s.streamingEnabled ? "开" : "关",
+                    "对应桌面版的 streaming 功能开关"};
+    case 8: {
+      // Account row doubles as the login entry, the same way the desktop app
+      // puts the account block in nav user menu rather than in settings.
+      if (!a.on) return {RowKind::Info, "网易云账号", "在线层未初始化", ""};
+      if (a.on->loggedIn()) {
+        const std::string& n = a.on->nickname();
+        return {RowKind::Action, "网易云账号",
+                n.empty() ? std::string("已登录") : n, "A 退出登录"};
+      }
+      return {RowKind::Action, "网易云账号",
+              a.on->loginState() == online::LoginState::WaitingQr
+                  ? std::string("等待扫码")
+                  : std::string("未登录"),
+              "A 扫码登录，去云盘页看二维码"};
+    }
+    case 9: return {RowKind::Action, "重新扫描曲库", "", "ZR"};
+    case 10: return {RowKind::Action, "清空播放历史", "", "不可撤销"};
+    case 11: return {RowKind::Info, "音乐目录",
+                     a.library.root().empty() ? "未找到" : a.library.root(), ""};
+    case 12: return {RowKind::Info, "曲目数量",
+                     std::to_string(a.library.tracks().size()) + " 首", ""};
+    case 13: return {RowKind::Info, "封面缓存",
                      std::to_string(a.library.covers().residentCount()) + " / " +
                          std::to_string(a.library.covers().registeredCount()),
                      "已解码 / 已注册"};
@@ -78,10 +98,33 @@ void activateSetting(App& a, int index) {
       a.store.saveSettings();
       break;
     case 6:
+      s.downloadEnabled = !s.downloadEnabled;
+      a.store.saveSettings();
+      a.toast(s.downloadEnabled ? "已启用下载入口" : "已隐藏下载入口");
+      break;
+    case 7:
+      s.streamingEnabled = !s.streamingEnabled;
+      a.store.saveSettings();
+      a.toast(s.streamingEnabled ? "已启用流媒体入口" : "已隐藏流媒体入口");
+      break;
+    case 8:
+      // Account row: logged in -> log out; logged out -> jump to the QR page.
+      if (!a.on) {
+        a.toast("在线层未初始化");
+      } else if (a.on->loggedIn()) {
+        a.on->logout();
+        a.toast("已退出网易云账号");
+      } else {
+        a.on->beginLogin();
+        a.goTo(Page::Cloud);
+        a.toast("正在获取登录二维码");
+      }
+      break;
+    case 9:
       a.library.scan();
       a.toast("曲库已重新扫描");
       break;
-    case 7:
+    case 10:
       a.store.clearHistory();
       a.toast("播放历史已清空");
       break;

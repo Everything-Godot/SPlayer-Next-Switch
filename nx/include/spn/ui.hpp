@@ -20,15 +20,29 @@
 
 namespace spn {
 
+namespace online {
+class Service;
+}
+
+namespace qr {
+struct Code;
+}
+
+// Page order follows the desktop sidebar exactly (src/utils/sidebarNav.ts), so
+// left/right cycling and the sidebar list share one source of truth.
 enum class Page {
   Home = 0,
   Library,
-  Liked,
-  History,
-  Downloads,
-  Favorites,
+  Artists,
+  Albums,
   Folders,
   Stats,
+  Liked,
+  Favorites,
+  Cloud,
+  Downloads,
+  Streaming,
+  History,
   Search,
   Settings,
   Player,
@@ -83,6 +97,11 @@ struct App {
   Page page = Page::Home;
   Page lastPage = Page::Home;
 
+  // The online layer is owned by main() and only borrowed here: keeping it a
+  // pointer means this header does not pull in sockets/threads, so the host
+  // layout preview still builds without linking the network stack.
+  online::Service* on = nullptr;
+
   // Selection state per page (index into that page's visible list).
   int homeSel = 0;
   int libSel = 0;
@@ -92,9 +111,13 @@ struct App {
   int histSel = 0;
   int histScroll = 0;
   int albumSel = 0;
+  int artistSel = 0;
   int folderSel = 0;
   int searchSel = 0;
   int settingSel = 0;
+  int cloudSel = 0;
+  int streamSel = 0;
+  int onlineSel = 0;
 
   // Playback ordering is the library's track list.
   int playingIndex = -1;
@@ -106,6 +129,11 @@ struct App {
 
   std::string searchQuery;
   bool searchActive = false;
+
+  // Header shown above the online song list: "搜索结果" or the playlist name,
+  // depending on where the list came from.
+  std::string onlineTitle;
+  int onlineScroll = 0;
 
   double lyricScroll = 0.0;
   bool dirty = true;
@@ -134,19 +162,30 @@ int uiContentPad();
 // Page renderers. Each returns nothing; `body` is the content area.
 void drawHome(App& a, Rect body);
 void drawLibrary(App& a, Rect body);
+void drawArtists(App& a, Rect body);
+void drawAlbums(App& a, Rect body);
 void drawLiked(App& a, Rect body);
 void drawHistory(App& a, Rect body);
 void drawDownloads(App& a, Rect body);
 void drawFavorites(App& a, Rect body);
 void drawFolders(App& a, Rect body);
 void drawStats(App& a, Rect body);
+void drawCloud(App& a, Rect body);
+void drawStreaming(App& a, Rect body);
 void drawSearch(App& a, Rect body);
 void drawSettings(App& a, Rect body);
 void drawPlayer(App& a, Rect body);
 
-// Library page tab (0 songs, 1 albums, 2 artists). Shared with the input layer.
-int libraryTab();
-void setLibraryTab(int t);
+// QR login card, drawn the way the desktop dialog draws it (white rounded
+// panel, 8 px modules, status line underneath). Shared by the cloud page and
+// the settings row so both entry points look identical.
+void drawLoginCard(App& a, Rect area);
+
+// Renders a QR matrix into `box` with integer module scaling and a quiet zone.
+// Exposed (rather than file-static) so nxtest can rasterise the exact pixels the
+// app draws and hand them to zbar: a matrix that decodes but a picture that does
+// not would still be a broken login screen.
+void drawQrCode(Canvas& c, const qr::Code& code, Rect box);
 
 // Settings page rows, shared with the input layer.
 int settingsRowCount();

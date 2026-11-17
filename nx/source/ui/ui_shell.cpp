@@ -41,12 +41,16 @@ const char* pageTitle(Page p) {
   switch (p) {
     case Page::Home: return "首页";
     case Page::Library: return "音乐库";
-    case Page::Liked: return "我喜欢的音乐";
-    case Page::History: return "播放历史";
-    case Page::Downloads: return "下载管理";
-    case Page::Favorites: return "我的收藏";
+    case Page::Artists: return "艺术家";
+    case Page::Albums: return "专辑";
     case Page::Folders: return "文件夹";
     case Page::Stats: return "统计";
+    case Page::Liked: return "我喜欢的音乐";
+    case Page::Favorites: return "我的收藏";
+    case Page::Cloud: return "云盘";
+    case Page::Downloads: return "下载";
+    case Page::Streaming: return "流媒体";
+    case Page::History: return "播放历史";
     case Page::Search: return "搜索";
     case Page::Settings: return "全局设置";
     case Page::Player: return "正在播放";
@@ -58,12 +62,16 @@ const char* pageSubtitle(Page p) {
   switch (p) {
     case Page::Home: return "为你精选，最近播放与收藏";
     case Page::Library: return "SD 卡上的全部曲目";
-    case Page::Liked: return "用心标记过的旋律";
-    case Page::History: return "按时间倒序的播放记录";
-    case Page::Downloads: return "本地已缓存的音源";
-    case Page::Favorites: return "自建歌单与收藏夹";
+    case Page::Artists: return "按艺术家浏览曲库";
+    case Page::Albums: return "按专辑浏览曲库";
     case Page::Folders: return "按目录浏览音乐";
     case Page::Stats: return "曲库与收听数据";
+    case Page::Liked: return "用心标记过的旋律";
+    case Page::Favorites: return "自建歌单与收藏夹";
+    case Page::Cloud: return "网易云歌单与账号";
+    case Page::Downloads: return "本地已缓存的音源";
+    case Page::Streaming: return "在线搜索与播放";
+    case Page::History: return "按时间倒序的播放记录";
     case Page::Search: return "输入关键字过滤曲目";
     case Page::Settings: return "外观、播放与按键";
     case Page::Player: return "歌词与封面";
@@ -225,17 +233,27 @@ void drawSidebar(App& a, Rect area) {
     Page page;
     const char* label;
     void (*icon)(Canvas&, Rect, Color);
+    // Mirrors SidebarNavEntry.feature: when the corresponding feature toggle is
+    // off the desktop hides the entry, so the port dims and greys it instead of
+    // reflowing the list (a fixed 12-slot sidebar is easier to navigate with a
+    // stick than a list that shifts under the cursor).
+    int feature = 0;  // 0 none, 1 download, 2 streaming
   };
+  // Order is copied verbatim from src/utils/sidebarNav.ts so muscle memory and
+  // screenshots line up with the desktop app.
   static const Item kItems[] = {
-      {Page::Home, "首页", icons::home},
-      {Page::Library, "音乐库", icons::disc},
-      {Page::Liked, "我喜欢的音乐", nullptr},
-      {Page::History, "播放历史", icons::clock},
-      {Page::Downloads, "下载管理", icons::download},
-      {Page::Favorites, "我的收藏", nullptr},
-      {Page::Folders, "文件夹", icons::folder},
-      {Page::Stats, "统计", icons::chart},
-      {Page::Settings, "全局设置", icons::gear},
+      {Page::Home, "首页", icons::home, 0},
+      {Page::Library, "音乐库", icons::disc, 0},
+      {Page::Artists, "艺术家", icons::person, 0},
+      {Page::Albums, "专辑", icons::note, 0},
+      {Page::Folders, "文件夹", icons::folder, 0},
+      {Page::Stats, "统计", icons::chart, 0},
+      {Page::Liked, "我喜欢的音乐", nullptr, 0},
+      {Page::Favorites, "我的收藏", nullptr, 0},
+      {Page::Cloud, "云盘", icons::cloud, 0},
+      {Page::Downloads, "下载", icons::download, 1},
+      {Page::Streaming, "流媒体", icons::broadcast, 2},
+      {Page::History, "播放历史", icons::clock, 0},
   };
   constexpr int kCount = int(sizeof(kItems) / sizeof(kItems[0]));
 

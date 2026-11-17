@@ -195,12 +195,19 @@ bool renderPage(Page page, const char* outPath, const Image& cover,
   switch (page) {
     case Page::Home: drawHome(a, body); break;
     case Page::Library: drawLibrary(a, body); break;
+    case Page::Artists: drawArtists(a, body); break;
+    case Page::Albums: drawAlbums(a, body); break;
     case Page::Liked: drawLiked(a, body); break;
     case Page::History: drawHistory(a, body); break;
     case Page::Downloads: drawDownloads(a, body); break;
     case Page::Favorites: drawFavorites(a, body); break;
     case Page::Folders: drawFolders(a, body); break;
     case Page::Stats: drawStats(a, body); break;
+    // Cloud / Streaming need a live online::Service; the preview leaves a.on
+    // null and these renderers fall back to their "not initialised" state,
+    // which is exactly what a console with no network shows.
+    case Page::Cloud: drawCloud(a, body); break;
+    case Page::Streaming: drawStreaming(a, body); break;
     case Page::Search: a.searchQuery = "cold"; drawSearch(a, body); break;
     case Page::Settings: drawSettings(a, body); break;
     case Page::Player: drawPlayer(a, body); break;
@@ -294,10 +301,13 @@ int main(int argc, char** argv) {
     writePpm((outDir + "/00-primitives.ppm").c_str(), px, W, H);
   }
 
-  const Page pages[] = {Page::Home,     Page::Library, Page::Liked,
-                        Page::History,  Page::Downloads, Page::Favorites,
-                        Page::Folders,  Page::Stats,   Page::Search,
-                        Page::Settings, Page::Player};
+  // Every page in sidebar order, so the generated contact sheet doubles as a
+// visual diff against the desktop layout.
+  const Page pages[] = {
+      Page::Home,      Page::Library,   Page::Artists,  Page::Albums,
+      Page::Folders,   Page::Stats,     Page::Liked,    Page::Favorites,
+      Page::Cloud,     Page::Downloads, Page::Streaming, Page::History,
+      Page::Search,    Page::Settings,  Page::Player};
   char buf[256];
   int n = 1;
   for (Page p : pages) {

@@ -16,6 +16,8 @@
 #include "spn/icons.hpp"
 #include "spn/library.hpp"
 #include "spn/lyrics.hpp"
+#include "spn/netease.hpp"
+#include "spn/online_service.hpp"
 #include "spn/store.hpp"
 #include "spn/types.hpp"
 #include "spn/ui.hpp"
@@ -27,6 +29,11 @@ namespace {
 
 App g;
 
+// The online layer lives in main() rather than inside App: App is a header-only
+// struct used by the host preview tool, and pulling sockets into it there would
+// break that build. main() hands it over as a borrowed pointer.
+online::Service gOnline;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -37,11 +44,15 @@ int* selectionFor(App& a) {
   switch (a.page) {
     case Page::Home: return &a.homeSel;
     case Page::Library: return &a.libSel;
+    case Page::Artists: return &a.artistSel;
+    case Page::Albums: return &a.albumSel;
     case Page::Liked: return &a.likedSel;
     case Page::History: return &a.histSel;
     case Page::Downloads: return &a.libSel;
     case Page::Favorites: return &a.folderSel;
     case Page::Folders: return &a.folderSel;
+    case Page::Cloud: return &a.cloudSel;
+    case Page::Streaming: return &a.onlineSel;
     case Page::Search: return &a.searchSel;
     case Page::Settings: return &a.settingSel;
     default: return nullptr;
@@ -56,9 +67,11 @@ int itemCountFor(App& a) {
       return std::max(1, hist);
     }
     case Page::Library:
-      if (libraryTab() == 0) return int(a.library.tracks().size());
-      if (libraryTab() == 1) return int(a.library.albums().size());
+      return int(a.library.tracks().size());
+    case Page::Artists:
       return int(a.library.artists().size());
+    case Page::Albums:
+      return int(a.library.albums().size());
     case Page::Liked: {
       int n = 0;
       for (const std::string& p : a.store.likedPaths()) {
@@ -86,16 +99,21 @@ int selectedTrackIndex(App& a) {
       const int i = std::clamp(a.homeSel, 0, int(hist.size()) - 1);
       return a.library.indexOf(hist[size_t(i)].path);
     }
-    case Page::Library:
-      if (libraryTab() == 0) return a.libSel;
-      if (libraryTab() == 1) {
-        const auto& albums = a.library.albums();
-        if (albums.empty()) return -1;
-        const int i = std::clamp(a.albumSel, 0, int(albums.size()) - 1);
-        const Album& al = albums[size_t(i)];
-        return al.trackIndices.empty() ? -1 : al.trackIndices.front();
-      }
-      return -1;
+    case Page::Library: return a.libSel;
+    case Page::Artists: {
+      const auto& artists = a.library.artists();
+      if (artists.empty()) return -1;
+      const int i = std::clamp(a.artistSel, 0, int(artists.size()) - 1);
+      const ArtistEntry& e = artists[size_t(i)];
+      return e.trackIndices.empty() ? -1 : e.trackIndices.front();
+    }
+    case Page::Albums: {
+      const auto& albums = a.library.albums();
+      if (albums.empty()) return -1;
+      const int i = std::clamp(a.albumSel, 0, int(albums.size()) - 1);
+      const Album& al = albums[size_t(i)];
+      return al.trackIndices.empty() ? -1 : al.trackIndices.front();
+    }
     case Page::Liked: {
       std::vector<int> idx;
       for (const std::string& p : a.store.likedPaths()) {
@@ -125,9 +143,13 @@ int selectedTrackIndex(App& a) {
 
 // Cycles page focus left/right across the sidebar order.
 void cyclePage(App& a, int dir) {
-  static const Page kOrder[] = {Page::Home,     Page::Library, Page::Liked,
-                                Page::History,  Page::Downloads, Page::Favorites,
-                                Page::Folders,  Page::Stats,   Page::Settings};
+  // Same 12 entries as the sidebar, plus Settings at the tail because the port
+  // has no nav-user menu to hide it behind.
+  static const Page kOrder[] = {
+      Page::Home,      Page::Library,   Page::Artists,  Page::Albums,
+      Page::Folders,   Page::Stats,     Page::Liked,    Page::Favorites,
+      Page::Cloud,     Page::Downloads, Page::Streaming, Page::History,
+      Page::Settings};
   constexpr int n = int(sizeof(kOrder) / sizeof(kOrder[0]));
   int cur = 0;
   for (int i = 0; i < n; ++i) {
@@ -147,6 +169,43 @@ bool pageIsList(Page p) {
     case Page::Player: return false;
     case Page::Favorites: return false;
     default: return true;
+  }
+}
+
+// Runs one frame of the online layer: reaps a finished job, publishes it, keeps
+// the QR poll ticking at the desktop's 1500 ms cadence, and hands a resolved
+// track to the audio engine.
+void pumpOnline() {
+  gOnline.poll();
+  g.on = &gOnline;
+
+  // QR polling, matching QrLoginPanel.vue's 1500 ms interval.
+  static double lastPoll = 0.0;
+  const online::LoginState ls = gOnline.loginState();
+  if (ls == online::LoginState::WaitingQr || ls == online::LoginState::Scanned) {
+    if (g.now - lastPoll >= 1.5) {
+      gOnline.pollLogin();
+      lastPoll = g.now;
+    }
+  } else {
+    lastPoll = g.now;
+  }
+
+  // A finished download becomes playback. This is the only place the online
+  // path touches the audio engine, so local playback stays untouched.
+  std::string ready = gOnline.takeReadyPath();
+  if (!ready.empty()) {
+    g.playPath(ready);
+    const std::string lrc = gOnline.takeLyrics();
+    if (!lrc.empty()) {
+      g.lyrics.parse(lrc);
+      g.toast("正在播放：" + std::string("在线曲目"));
+    }
+    g.dirty = true;
+  } else {
+    // Lyrics without a path happen when the track was already cached; drain
+    // them so they do not leak into the next track.
+    gOnline.takeLyrics();
   }
 }
 
@@ -181,12 +240,16 @@ void render() {
   switch (g.page) {
     case Page::Home: drawHome(g, body); break;
     case Page::Library: drawLibrary(g, body); break;
+    case Page::Artists: drawArtists(g, body); break;
+    case Page::Albums: drawAlbums(g, body); break;
     case Page::Liked: drawLiked(g, body); break;
     case Page::History: drawHistory(g, body); break;
     case Page::Downloads: drawDownloads(g, body); break;
     case Page::Favorites: drawFavorites(g, body); break;
     case Page::Folders: drawFolders(g, body); break;
     case Page::Stats: drawStats(g, body); break;
+    case Page::Cloud: drawCloud(g, body); break;
+    case Page::Streaming: drawStreaming(g, body); break;
     case Page::Search: drawSearch(g, body); break;
     case Page::Settings: drawSettings(g, body); break;
     case Page::Player: drawPlayer(g, body); break;
@@ -226,6 +289,40 @@ void handleInput(u64 kDown, PadState& pad) {
   if (pressed(HidNpadButton_A)) {
     if (g.page == Page::Settings) {
       activateSetting(g, g.settingSel);
+    } else if (g.page == Page::Cloud) {
+      // Cloud: logged out -> start the QR flow; logged in -> open the selected
+      // playlist (or load the list when it is still empty).
+      if (!g.on) {
+        // Online layer missing: nothing to do.
+      } else if (!g.on->loggedIn()) {
+        if (g.on->loginState() == online::LoginState::LoggedOut &&
+            g.on->loginUrl().empty()) {
+          g.on->beginLogin();
+          g.toast("正在获取登录二维码");
+        }
+      } else if (g.on->playlists().empty()) {
+        g.on->loadPlaylists();
+        g.toast("正在读取歌单");
+      } else {
+        g.on->openPlaylist(g.cloudSel);
+        g.onlineTitle = g.on->playlists()[size_t(g.cloudSel)].name;
+        g.onlineSel = 0;
+        g.onlineScroll = 0;
+        g.toast("正在打开歌单");
+      }
+    } else if (g.page == Page::Streaming) {
+      // Streaming: A plays the highlighted search result.
+      if (g.on && g.on->loggedIn() && g.onlineSel >= 0 &&
+          g.onlineSel < int(g.on->songs().size())) {
+        if (g.on->playSong(g.onlineSel)) {
+          g.toast("正在解析音源");
+        } else {
+          g.toast(g.on->error().empty() ? "上一项任务还没结束" : g.on->error());
+        }
+      } else if (g.on && !g.on->loggedIn()) {
+        g.on->beginLogin();
+        g.toast("正在获取登录二维码");
+      }
     } else if (g.page == Page::Stats) {
       g.goTo(Page::Player);
     } else if (g.page == Page::Player) {
@@ -323,10 +420,7 @@ void handleInput(u64 kDown, PadState& pad) {
   // Horizontal: library tabs / folders / volume in settings.
   if (pressed(HidNpadButton_Right) || pressed(HidNpadButton_Left)) {
     const bool right = pressed(HidNpadButton_Right);
-    if (g.page == Page::Library) {
-      setLibraryTab(libraryTab() + (right ? 1 : -1));
-      g.dirty = true;
-    } else if (g.page == Page::Settings) {
+    if (g.page == Page::Settings) {
       adjustSetting(g, g.settingSel, right ? 1 : -1);
     } else if (g.page == Page::Folders) {
       const int n = int(g.library.folders().size());
@@ -338,6 +432,40 @@ void handleInput(u64 kDown, PadState& pad) {
   }
 
   // --- search text entry ---------------------------------------------------
+  if (g.page == Page::Streaming) {
+    // Online search: Plus opens the keyboard and fires the request. Minus
+    // re-syncs the playlist list when logged in.
+    if (pressed(HidNpadButton_Plus)) {
+      SwkbdConfig kbd;
+      if (R_SUCCEEDED(swkbdCreate(&kbd, 0))) {
+        swkbdConfigMakePresetDefault(&kbd);
+        swkbdConfigSetGuideText(&kbd, "搜索网易云音乐");
+        char buf[128] = {0};
+        if (!gOnline.query().empty()) {
+          std::snprintf(buf, sizeof(buf), "%s", gOnline.query().c_str());
+        }
+        const Result rc = swkbdShow(&kbd, buf, sizeof(buf));
+        swkbdClose(&kbd);
+        if (R_SUCCEEDED(rc) && buf[0] != '\0') {
+          gOnline.search(buf);
+          g.onlineTitle = std::string("搜索结果：") + buf;
+          g.onlineSel = 0;
+          g.onlineScroll = 0;
+          g.toast(std::string("搜索 ") + buf);
+          g.dirty = true;
+        }
+      }
+    }
+  }
+
+  if (g.page == Page::Cloud && pressed(HidNpadButton_Minus)) {
+    if (g.on && g.on->loggedIn()) {
+      g.on->loadPlaylists();
+      g.toast("正在刷新歌单");
+      g.dirty = true;
+    }
+  }
+
   if (g.page == Page::Search) {
     if (pressed(HidNpadButton_Plus)) {
       // Plus opens the system keyboard; keep the query bounded.
@@ -517,6 +645,15 @@ int main(int argc, char** argv) {
     }
   }
 
+  // --- online -------------------------------------------------------------
+  // Only start the layer when the socket service came up; otherwise the worker
+  // would fail every request and the QR panel would look broken.
+  if (netOk) {
+    gOnline.init();
+    g.on = &gOnline;
+    printf("online: %s\n", gOnline.loggedIn() ? "session restored" : "not logged in");
+  }
+
   printf("starting UI...\n");
   consoleExit(nullptr);
 
@@ -548,6 +685,7 @@ int main(int argc, char** argv) {
     if ((kDown & HidNpadButton_Plus) != 0 && g.page != Page::Search) break;
 
     handleInput(kDown, pad);
+    pumpOnline();
 
     // Accumulate listening time while audio actually advances.
     if (g.audio.isPlaying()) {
@@ -584,6 +722,9 @@ int main(int argc, char** argv) {
   }
 
   // --- shutdown ------------------------------------------------------------
+  // Join the online worker before tearing the socket service down, otherwise a
+  // download in flight would call into a closed socket.
+  gOnline.shutdown();
   g.store.addListeningSeconds(uint64_t(listeningAccum));
   g.store.save();
   g.audio.shutdown();
